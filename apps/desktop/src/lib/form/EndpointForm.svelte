@@ -1,6 +1,7 @@
 <script lang="ts">
   import { updateDoc } from "../doc.svelte";
-  import type { Api, Endpoint, Method } from "../model";
+  import type { Api, Body, Endpoint, Method } from "../model";
+  import BodyEditor from "./BodyEditor.svelte";
   import KeyValueRows from "./KeyValueRows.svelte";
 
   // `api` is the already-parsed document `RequestPanel` computed — passed
@@ -67,6 +68,16 @@
       ep.query = query;
     });
   }
+
+  function onBodyChange(body: Body | undefined): void {
+    mutateEndpoint((ep) => {
+      if (body === undefined) {
+        delete ep.body;
+      } else {
+        ep.body = body;
+      }
+    });
+  }
 </script>
 
 {#if !endpoint}
@@ -116,6 +127,11 @@
         keyLabel="Param"
         valueLabel="Value"
       />
+    </section>
+
+    <section class="fields-section">
+      <h3>Body</h3>
+      <BodyEditor body={endpoint.body} onChange={onBodyChange} />
     </section>
   </div>
 {/if}

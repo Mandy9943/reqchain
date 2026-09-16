@@ -40,8 +40,11 @@ export interface Row {
 /** Runtime-safe coercion: anything that isn't a genuine plain object
  * (missing, `null`, an array, a primitive) is treated as empty, since
  * that's the only safe reading of a value the JSON tab could have set to
- * anything at all. */
-function asRecord(value: Record<string, string>): Record<string, string> {
+ * anything at all. Exported for other form code (e.g. `bodyEditor.ts`)
+ * that needs the exact same defensive coercion for a `Record<string,string>`
+ * field it didn't get from `recordToRows`/`recordsEqual` directly — one
+ * canonical guard, not a second copy of this logic. */
+export function asRecord(value: Record<string, string>): Record<string, string> {
   if (
     value !== null &&
     typeof value === "object" &&

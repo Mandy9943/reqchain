@@ -106,6 +106,118 @@ describe("parseApi", () => {
     });
   });
 
+  describe("per-endpoint body shape", () => {
+    function apiWithBody(body: string): string {
+      return `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": [
+    { "id": "e", "name": "E", "method": "GET", "path": "/", "body": ${body} }
+  ]
+}`;
+    }
+
+    it("accepts a document where body is simply absent", () => {
+      const text = `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": [
+    { "id": "e", "name": "E", "method": "GET", "path": "/" }
+  ]
+}`;
+      expect(parseApi(text).ok).toBe(true);
+    });
+
+    it("rejects a body that is not an object", () => {
+      expect(parseApi(apiWithBody('"oops"')).ok).toBe(false);
+      expect(parseApi(apiWithBody("[]")).ok).toBe(false);
+      expect(parseApi(apiWithBody("null")).ok).toBe(false);
+    });
+
+    it("rejects a body with an unknown type tag", () => {
+      const parsed = parseApi(apiWithBody('{ "type": "yaml" }'));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain("body.type");
+    });
+
+    it("accepts a json body with any content shape", () => {
+      expect(
+        parseApi(apiWithBody('{ "type": "json", "content": { "a": [1, null] } }')).ok,
+      ).toBe(true);
+      expect(parseApi(apiWithBody('{ "type": "json", "content": "x" }')).ok).toBe(
+        true,
+      );
+    });
+
+    it.each(["text", "xml"] as const)(
+      "rejects a %s body whose content is not a string",
+      (type) => {
+        const parsed = parseApi(apiWithBody(`{ "type": "${type}", "content": 5 }`));
+        expect(parsed.ok).toBe(false);
+        if (parsed.ok) return;
+        expect(parsed.error).toContain("content");
+      },
+    );
+
+    it.each(["text", "xml"] as const)("accepts a well-shaped %s body", (type) => {
+      expect(
+        parseApi(apiWithBody(`{ "type": "${type}", "content": "hi" }`)).ok,
+      ).toBe(true);
+    });
+
+    it("rejects a binary body whose path is not a string", () => {
+      const parsed = parseApi(apiWithBody('{ "type": "binary", "path": 5 }'));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain("path");
+    });
+
+    it("accepts a well-shaped binary body", () => {
+      expect(
+        parseApi(apiWithBody('{ "type": "binary", "path": "/tmp/x" }')).ok,
+      ).toBe(true);
+    });
+
+    it.each(["null", "[]", '"oops"'])(
+      "rejects a form body whose fields is %s",
+      (fields) => {
+        const parsed = parseApi(apiWithBody(`{ "type": "form", "fields": ${fields} }`));
+        expect(parsed.ok).toBe(false);
+      },
+    );
+
+    it("accepts a well-shaped form body", () => {
+      expect(
+        parseApi(apiWithBody('{ "type": "form", "fields": { "a": "1" } }')).ok,
+      ).toBe(true);
+    });
+
+    it.each(["fields", "files"] as const)(
+      "rejects a multipart body whose %s is not an object",
+      (field) => {
+        const parsed = parseApi(
+          apiWithBody(`{ "type": "multipart", "fields": {}, "files": {}, "${field}": null }`),
+        );
+        expect(parsed.ok).toBe(false);
+        if (parsed.ok) return;
+        expect(parsed.error).toContain(field);
+      },
+    );
+
+    it("accepts a well-shaped multipart body", () => {
+      expect(
+        parseApi(
+          apiWithBody('{ "type": "multipart", "fields": { "a": "1" }, "files": { "f": "/tmp/x" } }'),
+        ).ok,
+      ).toBe(true);
+    });
+  });
+
   it("preserves a chained auth block through a round trip", () => {
     const text = serializeApi({
       ...emptyApi("a", "A"),

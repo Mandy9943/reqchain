@@ -186,8 +186,73 @@ export function parseApi(text: string): ParseResult {
         };
       }
     }
+    if ("body" in epObj && epObj.body !== undefined) {
+      const bodyError = validateBodyShape(epObj.body, i);
+      if (bodyError) {
+        return { ok: false, error: bodyError };
+      }
+    }
   }
   return { ok: true, api: obj as unknown as Api };
+}
+
+/**
+ * Shallow shape check for one endpoint's `body`, same spirit as the
+ * headers/query/variables loop above: this exists only to stop a JSON-tab
+ * edit that corrupts `body` from producing `ok: true` and then crashing
+ * `BodyEditor` (e.g. `Object.entries(undefined)` on a missing
+ * `fields`/`files`, or handing a non-string straight to CodeMirror). Not a
+ * full re-validation of every variant's semantics — that stays `lint`'s
+ * job.
+ */
+function validateBodyShape(value: unknown, endpointIndex: number): string | null {
+  const prefix = `endpoints[${endpointIndex}].body`;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return `${prefix} must be an object`;
+  }
+  const body = value as Record<string, unknown>;
+  switch (body.type) {
+    case "json":
+      // `content` is `unknown` — any JSON value (including simply absent,
+      // which is defended against downstream) is valid.
+      return null;
+    case "text":
+    case "xml":
+      if (typeof body.content !== "string") {
+        return `${prefix}.content must be a string`;
+      }
+      return null;
+    case "binary":
+      if (typeof body.path !== "string") {
+        return `${prefix}.path must be a string`;
+      }
+      return null;
+    case "form":
+      if (
+        "fields" in body &&
+        (typeof body.fields !== "object" ||
+          body.fields === null ||
+          Array.isArray(body.fields))
+      ) {
+        return `${prefix}.fields must be an object`;
+      }
+      return null;
+    case "multipart":
+      for (const field of ["fields", "files"] as const) {
+        const fieldValue = body[field];
+        if (
+          field in body &&
+          (typeof fieldValue !== "object" ||
+            fieldValue === null ||
+            Array.isArray(fieldValue))
+        ) {
+          return `${prefix}.${field} must be an object`;
+        }
+      }
+      return null;
+    default:
+      return `${prefix}.type must be one of json, form, multipart, text, xml, binary`;
+  }
 }
 
 /** `JSON.stringify(api, null, 2) + "\n"` — the buffer text, not the on-disk bytes. */
