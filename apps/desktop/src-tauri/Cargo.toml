@@ -3,6 +3,14 @@ name = "reqchain-desktop"
 edition.workspace = true
 version.workspace = true
 
+[lib]
+name = "reqchain_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reqchain-desktop"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
