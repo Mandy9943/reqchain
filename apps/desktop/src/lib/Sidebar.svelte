@@ -37,7 +37,16 @@
   />
 
   <div class="apis">
-    {#each ui.workspace.apis as api (api.id)}
+    <!-- Keyed by INDEX, not by id. Nothing guarantees these ids are unique:
+         `Workspace::load` drops a duplicate API id, but it does not lint
+         ENDPOINT ids, so a file declaring the same endpoint id twice loads
+         fine and reaches this list (the validator reports it as a
+         diagnostic, it is not a load failure). A duplicate key makes Svelte
+         throw `each_key_duplicate`, which takes down the whole window — the
+         opposite of the spec's "other APIs keep working". Index keys cannot
+         collide; the only cost is that rows are not reused across a
+         reorder, which is invisible for a list this size. -->
+    {#each ui.workspace.apis as api, apiIndex (apiIndex)}
       <section class="api">
         <header class="api-header">
           <span class="api-name">{api.name}</span>
@@ -55,7 +64,7 @@
         </header>
 
         <ul class="endpoints">
-          {#each visibleEndpoints(api) as endpoint (endpoint.id)}
+          {#each visibleEndpoints(api) as endpoint, endpointIndex (endpointIndex)}
             <li>
               <button
                 type="button"
@@ -80,7 +89,7 @@
 
   {#if ui.workspace.errors.length > 0}
     <div class="errors">
-      {#each ui.workspace.errors as err (err.path)}
+      {#each ui.workspace.errors as err, errIndex (errIndex)}
         <div class="error-row">
           {err.path.split("/").pop()} — {err.message}
         </div>
