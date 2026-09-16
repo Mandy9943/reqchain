@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "precedence",
+  "name": "Precedence",
+  "baseUrl": "https://example.test",
+  "variables": {
+    "what": "api",
+    "where": "api",
+    "who": "api"
+  },
+  "environments": [
+    {
+      "name": "test",
+      "variables": {
+        "where": "environment",
+        "who": "environment"
+      }
+    },
+    {
+      "name": "prod",
+      "variables": {
+        "where": "prod-environment"
+      }
+    }
+  ],
+  "auth": {
+    "type": "none"
+  },
+  "endpoints": [
+    {
+      "id": "probe",
+      "name": "Probe",
+      "method": "GET",
+      "path": "/probe",
+      "headers": {},
+      "query": {},
+      "variables": {
+        "who": "endpoint"
+      },
+      "auth": {
+        "type": "inherit"
+      }
+    }
+  ]
+}
