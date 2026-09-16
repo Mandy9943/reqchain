@@ -9,4 +9,5 @@ pub mod request;
 pub mod secrets;
 pub mod shell;
 pub mod store;
+pub mod validate;
 pub mod vars;

@@ -1,0 +1,397 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reqchain.local/schema/reqchain-api.schema.json",
+  "title": "reqchain API definition",
+  "description": "Describes a reqchain API definition file: a named collection of HTTP endpoints, their auth, and the variables that parameterize them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "baseUrl", "endpoints"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "The format version this file was written against. This build understands version 1 only."
+    },
+    "id": {
+      "type": "string",
+      "description": "A short, stable, unique identifier for this API definition."
+    },
+    "name": {
+      "type": "string",
+      "description": "A human-readable display name for this API."
+    },
+    "baseUrl": {
+      "type": "string",
+      "description": "The URL prefix prepended to every endpoint's path, may itself contain {{variable}} references."
+    },
+    "variables": {
+      "type": "object",
+      "description": "API-level variables available to every endpoint, keyed by name, lowest precedence of the three variable scopes.",
+      "additionalProperties": { "type": "string", "description": "The variable's string value." }
+    },
+    "environments": {
+      "type": "array",
+      "description": "Named sets of variable overrides, such as `test` or `prod`, selectable at run time.",
+      "items": { "$ref": "#/$defs/environment" }
+    },
+    "auth": {
+      "$ref": "#/$defs/auth",
+      "description": "The API-level auth, used by any endpoint whose own auth is `inherit`."
+    },
+    "endpoints": {
+      "type": "array",
+      "description": "The HTTP endpoints this API exposes.",
+      "items": { "$ref": "#/$defs/endpoint" }
+    }
+  },
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "description": "A named environment that overrides API-level variables when selected.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The environment's name, such as `test` or `prod`."
+        },
+        "variables": {
+          "type": "object",
+          "description": "Variable overrides for this environment, keyed by name, middle precedence of the three variable scopes.",
+          "additionalProperties": { "type": "string", "description": "The variable's string value." }
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "description": "A single HTTP endpoint: its method, path, headers, query, body and auth.",
+      "additionalProperties": false,
+      "required": ["id", "name", "method", "path"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "A short, stable, unique identifier for this endpoint within the API."
+        },
+        "name": {
+          "type": "string",
+          "description": "A human-readable display name for this endpoint."
+        },
+        "method": {
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+          "description": "The HTTP method used for this endpoint's requests."
+        },
+        "path": {
+          "type": "string",
+          "description": "The URL path appended to the API's baseUrl, may contain {{variable}} references."
+        },
+        "headers": {
+          "type": "object",
+          "description": "HTTP headers to send with this endpoint's requests, keyed by header name.",
+          "additionalProperties": { "type": "string", "description": "The header's value, may contain {{variable}} references." }
+        },
+        "query": {
+          "type": "object",
+          "description": "Query string parameters to send with this endpoint's requests, keyed by parameter name.",
+          "additionalProperties": { "type": "string", "description": "The parameter's value, may contain {{variable}} references." }
+        },
+        "variables": {
+          "type": "object",
+          "description": "Endpoint-level variables, keyed by name, highest precedence of the three variable scopes.",
+          "additionalProperties": { "type": "string", "description": "The variable's string value." }
+        },
+        "auth": {
+          "$ref": "#/$defs/auth",
+          "description": "The auth used for this endpoint's requests; defaults to `inherit` from the API-level auth."
+        },
+        "body": {
+          "$ref": "#/$defs/body",
+          "description": "The request body sent with this endpoint's requests, if any."
+        }
+      }
+    },
+    "body": {
+      "description": "A request body, discriminated by `type`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "A JSON request body.",
+          "additionalProperties": false,
+          "required": ["type", "content"],
+          "properties": {
+            "type": { "const": "json", "description": "Discriminator identifying this as a JSON body." },
+            "content": { "description": "The JSON value to send as the request body." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "A URL-encoded form request body.",
+          "additionalProperties": false,
+          "required": ["type", "fields"],
+          "properties": {
+            "type": { "const": "form", "description": "Discriminator identifying this as a form body." },
+            "fields": {
+              "type": "object",
+              "description": "Form fields to send, keyed by field name.",
+              "additionalProperties": { "type": "string", "description": "The field's value, may contain {{variable}} references." }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "A multipart/form-data request body.",
+          "additionalProperties": false,
+          "required": ["type", "fields"],
+          "properties": {
+            "type": { "const": "multipart", "description": "Discriminator identifying this as a multipart body." },
+            "fields": {
+              "type": "object",
+              "description": "Text fields to send, keyed by field name.",
+              "additionalProperties": { "type": "string", "description": "The field's value, may contain {{variable}} references." }
+            },
+            "files": {
+              "type": "object",
+              "description": "File fields to send, keyed by field name, each value a filesystem path.",
+              "additionalProperties": { "type": "string", "description": "The path to the file to upload, may contain {{variable}} references." }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "A plain-text request body.",
+          "additionalProperties": false,
+          "required": ["type", "content"],
+          "properties": {
+            "type": { "const": "text", "description": "Discriminator identifying this as a text body." },
+            "content": { "type": "string", "description": "The text to send as the request body, may contain {{variable}} references." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "An XML request body.",
+          "additionalProperties": false,
+          "required": ["type", "content"],
+          "properties": {
+            "type": { "const": "xml", "description": "Discriminator identifying this as an XML body." },
+            "content": { "type": "string", "description": "The XML text to send as the request body, may contain {{variable}} references." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "A binary request body read from a file.",
+          "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": { "const": "binary", "description": "Discriminator identifying this as a binary body." },
+            "path": { "type": "string", "description": "The path to the file whose bytes are sent as the request body, may contain {{variable}} references." }
+          }
+        }
+      ]
+    },
+    "auth": {
+      "description": "An auth strategy, discriminated by `type`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Inherit the auth from the enclosing scope (API-level for an endpoint; treated as `none` at API level).",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "inherit", "description": "Discriminator identifying this as inherited auth." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Send no auth at all.",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "none", "description": "Discriminator identifying this as no auth." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "HTTP Basic auth.",
+          "additionalProperties": false,
+          "required": ["type", "username", "password"],
+          "properties": {
+            "type": { "const": "basic", "description": "Discriminator identifying this as Basic auth." },
+            "username": { "type": "string", "description": "The username, may contain {{variable}} references." },
+            "password": { "type": "string", "description": "The password, may contain {{variable}} references." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "A static bearer token sent in the Authorization header.",
+          "additionalProperties": false,
+          "required": ["type", "token"],
+          "properties": {
+            "type": { "const": "bearer", "description": "Discriminator identifying this as bearer auth." },
+            "token": { "type": "string", "description": "The bearer token, may contain {{variable}} references." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "One or more static headers used for auth.",
+          "additionalProperties": false,
+          "required": ["type", "headers"],
+          "properties": {
+            "type": { "const": "header", "description": "Discriminator identifying this as header auth." },
+            "headers": {
+              "type": "object",
+              "description": "Headers to send, keyed by header name.",
+              "additionalProperties": { "type": "string", "description": "The header's value, may contain {{variable}} references." }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "A header whose value is computed from an expression at request time.",
+          "additionalProperties": false,
+          "required": ["type", "name", "expression"],
+          "properties": {
+            "type": { "const": "computed", "description": "Discriminator identifying this as computed auth." },
+            "name": { "type": "string", "description": "The name of the header to set with the computed value." },
+            "expression": { "type": "string", "description": "The expression to evaluate, such as `md5(now(\"YYYYMMDD\") + {{documento}})`." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "A token fetched by calling another endpoint first, cached, and injected into requests.",
+          "additionalProperties": false,
+          "required": ["type", "source", "inject"],
+          "properties": {
+            "type": { "const": "chained", "description": "Discriminator identifying this as chained auth." },
+            "source": { "$ref": "#/$defs/chainSource", "description": "The endpoint to call to obtain the token." },
+            "extract": { "$ref": "#/$defs/extract", "description": "How to extract the token from the source endpoint's response; defaults to $.access_token in the response body." },
+            "ttl": { "$ref": "#/$defs/ttl", "description": "How to determine the token's time-to-live; defaults to $.expires_in seconds in the response body." },
+            "inject": { "$ref": "#/$defs/inject", "description": "Where to place the token in subsequent requests." },
+            "retryOn": {
+              "type": "array",
+              "description": "HTTP status codes on which to refetch the token and retry once; defaults to [401, 403].",
+              "items": { "type": "integer", "description": "An HTTP status code that should trigger a token refresh and retry." }
+            }
+          }
+        }
+      ]
+    },
+    "chainSource": {
+      "type": "object",
+      "description": "Identifies the endpoint that a chained auth calls to obtain its token.",
+      "additionalProperties": false,
+      "required": ["endpoint"],
+      "properties": {
+        "endpoint": { "type": "string", "description": "The id of the endpoint to call to obtain the token." }
+      }
+    },
+    "extract": {
+      "description": "How to extract a chained-auth token from its source endpoint's response, discriminated by `from`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Extract the token from the response body.",
+          "additionalProperties": false,
+          "required": ["from"],
+          "properties": {
+            "from": { "const": "body", "description": "Discriminator identifying this as body extraction." },
+            "jsonPath": { "type": "string", "description": "A JSONPath expression selecting the token within the response body." },
+            "xpath": { "type": "string", "description": "An XPath expression selecting the token within the response body. Not yet implemented — validation rejects this." },
+            "regex": { "type": "string", "description": "A regular expression whose first capture group is the token." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Extract the token from a response header.",
+          "additionalProperties": false,
+          "required": ["from", "name"],
+          "properties": {
+            "from": { "const": "header", "description": "Discriminator identifying this as header extraction." },
+            "name": { "type": "string", "description": "The name of the response header containing the token." },
+            "regex": { "type": "string", "description": "A regular expression whose first capture group is the token within the header value." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Use the response's HTTP status as the token (rare; mainly for probing).",
+          "additionalProperties": false,
+          "required": ["from"],
+          "properties": {
+            "from": { "const": "status", "description": "Discriminator identifying this as status extraction." }
+          }
+        }
+      ]
+    },
+    "ttl": {
+      "description": "How to determine a chained-auth token's time-to-live, discriminated by `from`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "The response body reports how many units of time the token remains valid, relative to when it was fetched.",
+          "additionalProperties": false,
+          "required": ["from", "jsonPath"],
+          "properties": {
+            "from": { "const": "body", "description": "Discriminator identifying this as a relative body-derived ttl." },
+            "jsonPath": { "type": "string", "description": "A JSONPath expression selecting the relative lifetime within the response body." },
+            "unit": { "type": "string", "description": "The unit the lifetime value is expressed in; defaults to `seconds`." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "The token is valid for a fixed number of seconds from when it was fetched.",
+          "additionalProperties": false,
+          "required": ["from", "seconds"],
+          "properties": {
+            "from": { "const": "fixed", "description": "Discriminator identifying this as a fixed ttl." },
+            "seconds": { "type": "integer", "description": "The number of seconds the token remains valid after being fetched." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "The response body reports an absolute expiry timestamp for the token.",
+          "additionalProperties": false,
+          "required": ["from", "jsonPath"],
+          "properties": {
+            "from": { "const": "absolute", "description": "Discriminator identifying this as an absolute body-derived ttl." },
+            "jsonPath": { "type": "string", "description": "A JSONPath expression selecting the absolute expiry timestamp within the response body." }
+          }
+        }
+      ]
+    },
+    "inject": {
+      "description": "Where a chained-auth token is placed in subsequent requests, discriminated by `into`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Inject the token into a request header.",
+          "additionalProperties": false,
+          "required": ["into", "name", "template"],
+          "properties": {
+            "into": { "const": "header", "description": "Discriminator identifying this as header injection." },
+            "name": { "type": "string", "description": "The name of the header to set with the token." },
+            "template": { "type": "string", "description": "The header value template, containing {{value}} where the token is substituted." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Inject the token into a query string parameter.",
+          "additionalProperties": false,
+          "required": ["into", "name"],
+          "properties": {
+            "into": { "const": "query", "description": "Discriminator identifying this as query injection." },
+            "name": { "type": "string", "description": "The name of the query parameter to set with the token." },
+            "template": { "type": "string", "description": "The query value template, containing {{value}} where the token is substituted; defaults to `{{value}}`." }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Inject the token into the request body at a JSON pointer.",
+          "additionalProperties": false,
+          "required": ["into", "pointer"],
+          "properties": {
+            "into": { "const": "body", "description": "Discriminator identifying this as body injection." },
+            "pointer": { "type": "string", "description": "A JSON pointer identifying where in the request body to set the token." },
+            "template": { "type": "string", "description": "The body value template, containing {{value}} where the token is substituted; defaults to `{{value}}`." }
+          }
+        }
+      ]
+    }
+  }
+}

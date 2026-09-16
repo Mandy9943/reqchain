@@ -19,6 +19,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+jsonschema = "0.26"
 md5_simple = { package = "md5", version = "0.7" }
 chrono = "0.4"
 serde_json_path = "0.7"
