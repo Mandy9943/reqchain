@@ -12,3 +12,4 @@ pub mod shell;
 pub mod store;
 pub mod validate;
 pub mod vars;
+pub mod watch;
