@@ -188,3 +188,40 @@ fn history_config_defaults_to_storing_bodies_and_round_trips() {
     .unwrap();
     assert!(!with.history.unwrap().store_bodies);
 }
+
+/// Re-review gap: `entry_from` redacts through `redact_display`, which expands
+/// each masked value into its percent-encoded form too. Nothing tested that on
+/// the disk leg — a secret echoed back url-encoded (a redirect target, a form
+/// round-trip) would have reached the history file if this ever regressed to
+/// the bare literal-only redaction.
+#[test]
+fn a_percent_encoded_secret_never_reaches_disk_either() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    let secret = "p@ss/w+rd=1234";
+    let encoded = "p%40ss%2Fw%2Brd%3D1234";
+    let req = reqchain_core::request::EffectiveRequest {
+        method: reqchain_core::model::Method::Get,
+        url: "https://api.example.com/x".into(),
+        headers: vec![],
+        body: None,
+    };
+    let result = reqchain_core::exec::RunResult {
+        status: 200,
+        elapsed_ms: 5,
+        size_bytes: 0,
+        headers: vec![],
+        body: format!("{{\"echo\":\"{encoded}\"}}").into_bytes(),
+        effective: req.clone(),
+        auth_trace: vec![],
+    };
+    let entry = reqchain_core::history::entry_from(&result, &req, &[secret.to_string()], true);
+    history::append(&paths, "api", "ep", &entry).unwrap();
+
+    let raw = std::fs::read_to_string(paths.history_dir().join("api").join("ep.jsonl")).unwrap();
+    assert!(
+        !raw.contains(encoded),
+        "the percent-encoded form of a secret must not reach disk: {raw}"
+    );
+    assert!(!raw.contains(secret));
+}
