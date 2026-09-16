@@ -1,9 +1,20 @@
 <script lang="ts">
-  import { currentDoc, updateDoc } from "../doc.svelte";
-  import type { Endpoint, Method } from "../model";
+  import { updateDoc } from "../doc.svelte";
+  import type { Api, Endpoint, Method } from "../model";
   import KeyValueRows from "./KeyValueRows.svelte";
 
-  let { endpointId }: { endpointId: string } = $props();
+  // `api` is the already-parsed document `RequestPanel` computed — passed
+  // in rather than re-derived here via `currentDoc()`. `currentDoc()`
+  // requires the selection to still be "live" (`selectedApi()`), which is
+  // NOT true for a just-removed-but-still-displayed endpoint
+  // (`ui.removedSelected`); `RequestPanel`'s own `parsedDoc` is built from
+  // its removed-tolerant `api`/`bufferText` fallbacks instead, so it stays
+  // renderable in that case (mirroring what the JSON tab's `Editor` already
+  // does). Re-deriving via `currentDoc()` here would silently go
+  // `undefined` in exactly that case and dead-end the form on "not
+  // available" — Form is the default tab, so that dead end would be the
+  // first and only thing such a user sees.
+  let { api, endpointId }: { api: Api; endpointId: string } = $props();
 
   const METHODS: Method[] = [
     "GET",
@@ -15,17 +26,8 @@
     "OPTIONS",
   ];
 
-  // `currentDoc()` re-parses the selected API's buffer on every reactive
-  // read, so this stays live across every keystroke made through this form
-  // (and through the JSON tab, since both edit `ui.buffers[apiId]`). The
-  // caller (RequestPanel) only mounts this component once the buffer is
-  // known to parse — this fallback is for the narrow window right after
-  // that check where the selection has moved on again before this
-  // component's own effects settle, not a case this form tries to explain
-  // to the user.
-  const doc = $derived(currentDoc());
   const endpoint = $derived<Endpoint | undefined>(
-    doc?.ok ? doc.api.endpoints.find((e) => e.id === endpointId) : undefined,
+    api.endpoints.find((e) => e.id === endpointId),
   );
 
   /** Runs `fn` against the live endpoint inside the document `updateDoc`

@@ -41,6 +41,71 @@ describe("parseApi", () => {
     expect(parseApi('{"schemaVersion":1}').ok).toBe(false); // no id/name/baseUrl/endpoints
   });
 
+  // HIGH review finding: the Form tab (EndpointForm/KeyValueRows) does
+  // `Object.entries(endpoint.headers)` etc. — a JSON-tab edit that sets one
+  // of these to `null` (or any non-object) must be refused here, at parse
+  // time, rather than being accepted as `ok: true` and crashing the form
+  // the moment it renders.
+  describe("per-endpoint headers/query/variables shape", () => {
+    function apiWith(endpointExtra: string): string {
+      return `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": [
+    { "id": "e", "name": "E", "method": "GET", "path": "/", ${endpointExtra} }
+  ]
+}`;
+    }
+
+    it.each(["headers", "query", "variables"] as const)(
+      "rejects %s set to null",
+      (field) => {
+        const parsed = parseApi(apiWith(`"${field}": null`));
+        expect(parsed.ok).toBe(false);
+        if (parsed.ok) return;
+        expect(parsed.error).toContain(field);
+      },
+    );
+
+    it.each(["headers", "query", "variables"] as const)(
+      "rejects %s set to an array",
+      (field) => {
+        const parsed = parseApi(apiWith(`"${field}": []`));
+        expect(parsed.ok).toBe(false);
+      },
+    );
+
+    it.each(["headers", "query", "variables"] as const)(
+      "rejects %s set to a string",
+      (field) => {
+        const parsed = parseApi(apiWith(`"${field}": "oops"`));
+        expect(parsed.ok).toBe(false);
+      },
+    );
+
+    it("accepts a document where headers/query/variables are simply absent (older/hand-written fixtures)", () => {
+      // Deliberately lax here: this is what the FILE fixture above already
+      // relies on (no headers/query/variables on its one endpoint at all).
+      // Downstream (KeyValueRows' `asRecord`) treats an absent field as
+      // `{}` defensively rather than requiring parseApi to reject it.
+      const parsed = parseApi(apiWith('"unrelated": true'));
+      expect(parsed.ok).toBe(true);
+    });
+
+    it("rejects a non-object entry inside endpoints", () => {
+      const text = `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": ["not an object"]
+}`;
+      expect(parseApi(text).ok).toBe(false);
+    });
+  });
+
   it("preserves a chained auth block through a round trip", () => {
     const text = serializeApi({
       ...emptyApi("a", "A"),

@@ -383,7 +383,7 @@
             {/if}
           </div>
         {:else}
-          <EndpointForm endpointId={endpoint.id} />
+          <EndpointForm endpointId={endpoint.id} api={parsedDoc.api} />
         {/if}
       {:else}
         <div class="editor-wrap">

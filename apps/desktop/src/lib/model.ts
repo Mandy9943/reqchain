@@ -158,6 +158,35 @@ export function parseApi(text: string): ParseResult {
   if (!Array.isArray(obj.endpoints)) {
     return { ok: false, error: "missing or invalid \"endpoints\"" };
   }
+  // Deliberately narrow, not a full re-validation of every endpoint field:
+  // this exists only to stop a JSON-tab edit that deletes/corrupts
+  // `headers`/`query`/`variables` from silently producing `ok: true` and
+  // then crashing the form the moment it does `Object.entries(...)` on a
+  // value that isn't an object. A field that is simply ABSENT is left
+  // alone (older/hand-written fixtures may omit it; the form treats a
+  // missing record defensively as empty, see keyValueRows.ts's
+  // `asRecord`) — only a field that is PRESENT but not a plain object
+  // (`null`, an array, a string, ...) is rejected here.
+  for (const [i, ep] of (obj.endpoints as unknown[]).entries()) {
+    if (typeof ep !== "object" || ep === null || Array.isArray(ep)) {
+      return { ok: false, error: `endpoints[${i}] is not an object` };
+    }
+    const epObj = ep as Record<string, unknown>;
+    for (const field of ["headers", "query", "variables"] as const) {
+      const fieldValue = epObj[field];
+      if (
+        field in epObj &&
+        (typeof fieldValue !== "object" ||
+          fieldValue === null ||
+          Array.isArray(fieldValue))
+      ) {
+        return {
+          ok: false,
+          error: `endpoints[${i}].${field} must be an object`,
+        };
+      }
+    }
+  }
   return { ok: true, api: obj as unknown as Api };
 }
 
