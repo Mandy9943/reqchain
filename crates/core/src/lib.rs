@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cache;
 pub mod exec;
 pub mod expr;
 pub mod model;
