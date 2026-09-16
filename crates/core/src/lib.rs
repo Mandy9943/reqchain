@@ -1,6 +1,9 @@
+pub mod exec;
 pub mod expr;
 pub mod model;
 pub mod paths;
+pub mod request;
 pub mod secrets;
+pub mod shell;
 pub mod store;
 pub mod vars;
