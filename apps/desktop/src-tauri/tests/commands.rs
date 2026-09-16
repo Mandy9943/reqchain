@@ -62,6 +62,43 @@ fn save_api_writes_canonical_json() {
 }
 
 #[test]
+fn load_workspace_and_save_api_use_the_file_the_api_was_loaded_from_not_the_id() {
+    let (_d, state) = state_with("gateway.json", GOOD);
+    let ws = commands::load_workspace_inner(&state);
+    assert_eq!(ws.apis.len(), 1);
+    assert_eq!(ws.apis[0].id, "demo");
+    assert_eq!(
+        ws.apis[0].text, GOOD,
+        "must return the real file text, not empty"
+    );
+
+    let diags = commands::save_api_inner(&state, "demo", GOOD).unwrap();
+    assert!(diags.iter().all(|d| d.severity != "error"));
+    let gateway_path = state.paths.apis_dir().join("gateway.json");
+    let wrong_path = state.paths.apis_dir().join("demo.json");
+    assert!(gateway_path.exists(), "must save back to gateway.json");
+    assert!(
+        !wrong_path.exists(),
+        "must not invent a demo.json alongside gateway.json"
+    );
+}
+
+#[test]
+fn save_api_writes_atomically_via_temp_file_and_rename() {
+    let (_d, state) = state_with("demo.json", GOOD);
+    let diags = commands::save_api_inner(&state, "demo", GOOD).unwrap();
+    assert!(diags.iter().all(|d| d.severity != "error"));
+    // No stray temp files left behind in the apis dir after a successful save.
+    let leftover: Vec<_> = std::fs::read_dir(state.paths.apis_dir())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains(".tmp."))
+        .collect();
+    assert!(leftover.is_empty(), "left temp files: {leftover:?}");
+}
+
+#[test]
 fn lint_reports_the_chained_default_warning() {
     let text = r#"{"schemaVersion":1,"id":"d","name":"D","baseUrl":"https://x","endpoints":[
       {"id":"token","name":"T","method":"POST","path":"/token"},
