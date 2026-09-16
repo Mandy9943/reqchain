@@ -77,6 +77,13 @@
     ) {
       ui.buffers[current.id] = current.text;
       cleanSnapshot[current.id] = current.text;
+      // The post-save reload saw the file move under a buffer it still
+      // considered dirty and raised `diskChanged`. It was OUR save that moved
+      // it, and the buffer now holds exactly what is on disk, so leaving the
+      // flag set shows "changed on disk / Discard mine" after essentially
+      // every save — a false alarm that reads like "you are about to lose
+      // work" against a buffer that is byte-identical to the file.
+      ui.diskChanged[current.id] = false;
     }
   });
 

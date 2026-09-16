@@ -417,5 +417,10 @@ mod tests {
         assert!(truncated);
         assert!(!shown.contains(secret));
         assert!(!shown.contains("super-secret"));
+        // The two assertions above both pass under the WRONG order too:
+        // truncating first leaves the 5-char fragment "super" at the cut,
+        // which contains neither the full secret nor "super-secret". This is
+        // the assertion that actually distinguishes the orders.
+        assert!(!shown.contains("super"));
     }
 }
