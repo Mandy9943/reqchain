@@ -15,6 +15,22 @@
 // though `Endpoint.headers` is typed as `Record<string,string>`. Every
 // function here that takes a "record" defends against that at runtime
 // instead of trusting the compile-time type.
+//
+// Row order is a BUFFER/DISPLAY guarantee only, not an on-disk one.
+// `headers`, `query`, `variables` and (see `bodyEditor.ts`) `form`/
+// `multipart` body fields are all `BTreeMap<String, String>` in
+// `model.rs` — `Api::to_json_string` (the Rust serializer that actually
+// writes the file) therefore emits them in ALPHABETICAL key order on every
+// save, regardless of what order `rowsToRecord` built them in here. This
+// module's careful "renaming a key preserves its row position" behavior is
+// real and correct for the in-memory buffer (what the JSON tab shows
+// before a save, and what `git diff` sees between two saves if row order
+// happens to already be alphabetical), but a save can still reorder keys
+// out from under a row's displayed position — this is expected, not a bug
+// in either this module or the Rust serializer, and it is deliberately
+// NOT something either side works around (alphabetical order is
+// deterministic and diff-friendly, which is arguably the better property
+// to have on disk).
 
 export interface Row {
   key: string;

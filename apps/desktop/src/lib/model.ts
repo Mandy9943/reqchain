@@ -198,12 +198,28 @@ export function parseApi(text: string): ParseResult {
 
 /**
  * Shallow shape check for one endpoint's `body`, same spirit as the
- * headers/query/variables loop above: this exists only to stop a JSON-tab
- * edit that corrupts `body` from producing `ok: true` and then crashing
+ * headers/query/variables loop above: this exists to stop a JSON-tab edit
+ * that corrupts `body` from producing `ok: true` and then either crashing
  * `BodyEditor` (e.g. `Object.entries(undefined)` on a missing
- * `fields`/`files`, or handing a non-string straight to CodeMirror). Not a
- * full re-validation of every variant's semantics — that stays `lint`'s
- * job.
+ * `fields`/`files`, or handing a non-string straight to CodeMirror) OR —
+ * the case that matters just as much — producing a document that LOOKS
+ * fine to this form but that Rust's `Api::from_json` will reject outright
+ * at Save time with a raw `missing field ...` error, for an endpoint the
+ * user may never have touched the body editor on at all.
+ *
+ * `model.rs`'s `Body` variants are NOT uniformly defaulted:
+ * `Json.content`, `Form.fields` and `Multipart.fields` have no
+ * `#[serde(default)]` at all, so serde requires them to be present —
+ * unlike `Multipart.files`, which does have `#[serde(default)]` and may be
+ * absent. So "the field is simply missing" is NOT the safe/lenient case
+ * here the way it is for `headers`/`query`/`variables` above — presence is
+ * required for exactly the fields Rust requires it for, mirroring the
+ * `text`/`xml`/`binary` cases below (which already implicitly require
+ * `content`/`path` by rejecting anything that isn't a string, `undefined`
+ * included).
+ *
+ * Not a full re-validation of every variant's semantics — that stays
+ * `lint`'s job.
  */
 function validateBodyShape(value: unknown, endpointIndex: number): string | null {
   const prefix = `endpoints[${endpointIndex}].body`;
@@ -211,10 +227,31 @@ function validateBodyShape(value: unknown, endpointIndex: number): string | null
     return `${prefix} must be an object`;
   }
   const body = value as Record<string, unknown>;
+
+  function requireObjectField(field: "fields" | "files"): string | null {
+    if (!(field in body)) {
+      return `${prefix}.${field} is required`;
+    }
+    const fieldValue = body[field];
+    if (
+      typeof fieldValue !== "object" ||
+      fieldValue === null ||
+      Array.isArray(fieldValue)
+    ) {
+      return `${prefix}.${field} must be an object`;
+    }
+    return null;
+  }
+
   switch (body.type) {
     case "json":
-      // `content` is `unknown` — any JSON value (including simply absent,
-      // which is defended against downstream) is valid.
+      // `content` is `unknown` — any JSON value is a valid value for it —
+      // but `model.rs`'s `Json { content }` has no `#[serde(default)]`, so
+      // the KEY itself must be present (even `null` counts as present: a
+      // JSON `null` is a real value for `serde_json::Value`).
+      if (!("content" in body)) {
+        return `${prefix}.content is required`;
+      }
       return null;
     case "text":
     case "xml":
@@ -228,28 +265,23 @@ function validateBodyShape(value: unknown, endpointIndex: number): string | null
       }
       return null;
     case "form":
+      return requireObjectField("fields");
+    case "multipart": {
+      const fieldsError = requireObjectField("fields");
+      if (fieldsError) return fieldsError;
+      // Unlike `fields`, `model.rs`'s `Multipart.files` DOES have
+      // `#[serde(default)]` — genuinely optional, so only checked when
+      // present (same leniency as `headers`/`query`/`variables`).
       if (
-        "fields" in body &&
-        (typeof body.fields !== "object" ||
-          body.fields === null ||
-          Array.isArray(body.fields))
+        "files" in body &&
+        (typeof body.files !== "object" ||
+          body.files === null ||
+          Array.isArray(body.files))
       ) {
-        return `${prefix}.fields must be an object`;
+        return `${prefix}.files must be an object`;
       }
       return null;
-    case "multipart":
-      for (const field of ["fields", "files"] as const) {
-        const fieldValue = body[field];
-        if (
-          field in body &&
-          (typeof fieldValue !== "object" ||
-            fieldValue === null ||
-            Array.isArray(fieldValue))
-        ) {
-          return `${prefix}.${field} must be an object`;
-        }
-      }
-      return null;
+    }
     default:
       return `${prefix}.type must be one of json, form, multipart, text, xml, binary`;
   }

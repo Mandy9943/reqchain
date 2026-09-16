@@ -10,6 +10,12 @@
 // validation is ever loosened, and defense-in-depth is cheap here. Every
 // function below treats a `Body` whose fields don't match its variant's
 // expected shape defensively rather than throwing.
+//
+// Row order in `form.fields`/`multipart.fields`/`multipart.files` is a
+// BUFFER/DISPLAY guarantee only, not an on-disk one — see the matching note
+// in `keyValueRows.ts`. These are `BTreeMap<String, String>` in `model.rs`,
+// so `Api::to_json_string` writes them in alphabetical key order on every
+// save regardless of the row order `KeyValueRows` built them in here.
 
 import { asRecord } from "./keyValueRows";
 import type { Body } from "../model";

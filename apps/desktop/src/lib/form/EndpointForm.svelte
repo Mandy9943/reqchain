@@ -131,7 +131,24 @@
 
     <section class="fields-section">
       <h3>Body</h3>
-      <BodyEditor body={endpoint.body} onChange={onBodyChange} />
+      {#key endpointId}
+        <!-- `BodyEditor` keeps local state (a pending unconfirmed type
+             switch, an uncommitted invalid-JSON draft) that is scoped to
+             ONE endpoint. Its own internal echo-vs-external check
+             (`bodyKey`) compares body CONTENT only, with no endpoint
+             identity in it — two endpoints whose bodies happen to
+             serialize identically (e.g. both the untouched default
+             `{"type":"json","content":""}`) would not look like a change
+             to it, so switching endpoints without this `{#key}` could
+             leave endpoint A's pending confirmation or draft text mounted
+             over endpoint B's editor, and confirming/finishing it would
+             mutate B through `onBodyChange`'s closed-over `endpointId`.
+             Keying on `endpointId` forces Svelte to destroy and recreate
+             the component on every endpoint switch, so no such state can
+             ever survive one — independent of whether the two bodies
+             collide. -->
+        <BodyEditor body={endpoint.body} onChange={onBodyChange} />
+      {/key}
     </section>
   </div>
 {/if}

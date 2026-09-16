@@ -216,6 +216,46 @@ describe("parseApi", () => {
         ).ok,
       ).toBe(true);
     });
+
+    // `model.rs`'s `Body::Json { content }`, `Body::Form { fields }` and
+    // `Body::Multipart { fields }` have NO `#[serde(default)]` — serde
+    // requires them, unlike headers/query/variables above (which are all
+    // `#[serde(default)]` and so tolerate simply being absent). A document
+    // missing one of these would still pass the old (pre-fix) shape check,
+    // render fine in the form, and then fail at Save with a raw Rust
+    // `missing field ...` error — this is the case these tests pin.
+    it("rejects a json body with content simply absent", () => {
+      const parsed = parseApi(apiWithBody('{ "type": "json" }'));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain("content");
+    });
+
+    it("accepts a json body whose content is explicitly null (a real JSON value, not absence)", () => {
+      expect(parseApi(apiWithBody('{ "type": "json", "content": null }')).ok).toBe(
+        true,
+      );
+    });
+
+    it("rejects a form body with fields simply absent", () => {
+      const parsed = parseApi(apiWithBody('{ "type": "form" }'));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain("fields");
+    });
+
+    it("rejects a multipart body with fields simply absent", () => {
+      const parsed = parseApi(apiWithBody('{ "type": "multipart", "files": {} }'));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain("fields");
+    });
+
+    it("accepts a multipart body with files simply absent (Multipart.files HAS #[serde(default)])", () => {
+      expect(
+        parseApi(apiWithBody('{ "type": "multipart", "fields": {} }')).ok,
+      ).toBe(true);
+    });
   });
 
   it("preserves a chained auth block through a round trip", () => {

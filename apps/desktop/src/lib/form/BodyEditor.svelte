@@ -121,7 +121,12 @@
   }
 
   /** Applies a (confirmed, or no-confirmation-needed) switch to a fresh
-   * empty body of `type`. Also resets `jsonText` when the target is
+   * empty body of `type`. Always clears `jsonParseError` — any switch away
+   * from `json` while an invalid draft was pending must not leave a stale
+   * error lingering (invisible today since the error only renders while
+   * `currentType === "json"`, but leaving it set would show up the moment
+   * a *later* switch back to json rendered the error paragraph before the
+   * first real keystroke). Also resets `jsonText` when the target is
    * `"json"` — this is a deliberate, user-initiated content change (a
    * brand-new empty body), not an edit inside the json sub-editor, so there
    * is no "text the user typed" to preserve; without this, switching away
@@ -129,6 +134,7 @@
    * endpoint had before. */
   function applyTypeSwitch(type: BodyType): void {
     const next = defaultBodyForType(type);
+    jsonParseError = null;
     if (next?.type === "json") {
       jsonText = jsonContentText(next.content);
     }
