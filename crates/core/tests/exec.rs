@@ -103,6 +103,10 @@ fn shell_export_masks_secret_values() {
     assert!(command.starts_with("curl "));
     assert!(!command.contains("sup3rsecret"));
     assert!(command.contains("***"));
+
+    let today = chrono::Local::now().format("%Y%m%d");
+    let expected = format!("{:x}", md5_simple::compute(format!("{today}12345678").as_bytes()));
+    assert!(command.contains(&format!("hash: {expected}")));
 }
 
 fn effective_json_body(req: &request::EffectiveRequest) -> &str {
