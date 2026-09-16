@@ -48,3 +48,19 @@ fn missing_workspace_is_empty_not_an_error() {
     assert!(ws.apis.is_empty());
     assert!(ws.errors.is_empty());
 }
+
+#[test]
+fn an_unreadable_apis_directory_is_reported_not_swallowed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("workspace")).unwrap();
+    // `apis` exists but is a file, so read_dir fails with something other than NotFound
+    std::fs::write(dir.path().join("workspace/apis"), "not a directory").unwrap();
+    let ws = Workspace::load(&Paths::at(dir.path()));
+    assert!(ws.apis.is_empty());
+    assert_eq!(
+        ws.errors.len(),
+        1,
+        "the failure must be reported, not swallowed"
+    );
+    assert!(ws.errors[0].path.ends_with("apis"));
+}

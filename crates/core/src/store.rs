@@ -18,8 +18,19 @@ impl Workspace {
     pub fn load(paths: &Paths) -> Workspace {
         let mut ws = Workspace::default();
         let dir = paths.apis_dir();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return ws;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) => {
+                // Only treat "not found" as empty (directory doesn't exist yet).
+                // Any other error (permission denied, not a directory, etc.) must be reported.
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    ws.errors.push(FileError {
+                        path: dir,
+                        message: e.to_string(),
+                    });
+                }
+                return ws;
+            }
         };
         let mut files: Vec<PathBuf> = entries
             .flatten()
