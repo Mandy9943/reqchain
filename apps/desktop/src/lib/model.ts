@@ -10,7 +10,21 @@
 // `serializeApi` is not a second serializer: it produces buffer text that
 // `save_api` (Rust) parses and re-serializes with `Api::to_json_string`.
 // The bytes that land on disk always come from Rust. See
-// crates/core/tests/fixtures_roundtrip.rs, which pins that the two agree.
+// crates/core/tests/fixtures_roundtrip.rs, which pins the Rust side's own
+// round-trip stability.
+//
+// Optionality: a field is optional here (`?`) only if `model.rs` marks it
+// `#[serde(default, skip_serializing_if = "Option::is_none")]` — i.e. Rust
+// itself omits it when empty. Every other `#[serde(default = ...)]` field
+// (no `skip_serializing_if`) is REQUIRED here, because Rust always writes
+// it, and every real fixture on disk carries it (`"variables": {}`,
+// `"headers": {}`, an explicit `auth` block, ...). Marking those required
+// makes the compiler catch a builder that forgets one — instead of the
+// buffer looking unlike every sibling object in the file until the next
+// save, and instead of a form reading e.g. `endpoint.headers` right after
+// creation and getting `undefined` instead of `{}`. `emptyApi` and
+// `emptyEndpoint` (and any future builder) must populate these with the
+// same defaults Rust does.
 
 export type Method =
   | "GET"
@@ -27,7 +41,7 @@ export type Body =
   | {
       type: "multipart";
       fields: Record<string, string>;
-      files?: Record<string, string>;
+      files: Record<string, string>;
     }
   | { type: "text"; content: string }
   | { type: "xml"; content: string }
@@ -50,14 +64,14 @@ export type AuthExtract =
 export type TtlUnit = "seconds" | "milliseconds";
 
 export type AuthTtl =
-  | { from: "body"; jsonPath: string; unit?: TtlUnit }
+  | { from: "body"; jsonPath: string; unit: TtlUnit }
   | { from: "fixed"; seconds: number }
   | { from: "absolute"; jsonPath: string };
 
 export type AuthInject =
   | { into: "header"; name: string; template: string }
-  | { into: "query"; name: string; template?: string }
-  | { into: "body"; pointer: string; template?: string };
+  | { into: "query"; name: string; template: string }
+  | { into: "body"; pointer: string; template: string };
 
 export type Auth =
   | { type: "inherit" }
@@ -80,16 +94,16 @@ export interface Endpoint {
   name: string;
   method: Method;
   path: string;
-  headers?: Record<string, string>;
-  query?: Record<string, string>;
-  variables?: Record<string, string>;
-  auth?: Auth;
+  headers: Record<string, string>;
+  query: Record<string, string>;
+  variables: Record<string, string>;
+  auth: Auth;
   body?: Body;
 }
 
 export interface Environment {
   name: string;
-  variables?: Record<string, string>;
+  variables: Record<string, string>;
 }
 
 export interface HistoryConfig {
@@ -101,9 +115,9 @@ export interface Api {
   id: string;
   name: string;
   baseUrl: string;
-  variables?: Record<string, string>;
-  environments?: Environment[];
-  auth?: Auth;
+  variables: Record<string, string>;
+  environments: Environment[];
+  auth: Auth;
   history?: HistoryConfig;
   endpoints: Endpoint[];
 }
@@ -152,23 +166,38 @@ export function serializeApi(api: Api): string {
   return JSON.stringify(api, null, 2) + "\n";
 }
 
-/** Field order matches `Api` in model.rs. */
+/**
+ * Field order matches `Api` in model.rs. Every field Rust always
+ * serializes (see the optionality note above) is populated with Rust's own
+ * default, so the result already looks like every other object in the
+ * file — no waiting for a save to normalize it.
+ */
 export function emptyApi(id: string, name: string): Api {
   return {
     schemaVersion: 1,
     id,
     name,
     baseUrl: "https://",
+    variables: {},
+    environments: [],
+    auth: { type: "none" }, // Auth::none(), Api's #[serde(default)]
     endpoints: [],
   };
 }
 
-/** Field order matches `Endpoint` in model.rs. */
+/**
+ * Field order matches `Endpoint` in model.rs. Every field Rust always
+ * serializes is populated with Rust's own default — see `emptyApi`.
+ */
 export function emptyEndpoint(id: string, name: string): Endpoint {
   return {
     id,
     name,
     method: "GET",
     path: "/",
+    headers: {},
+    query: {},
+    variables: {},
+    auth: { type: "inherit" }, // Auth::inherit(), Endpoint's #[serde(default)]
   };
 }

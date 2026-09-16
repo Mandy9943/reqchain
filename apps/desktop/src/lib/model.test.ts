@@ -43,13 +43,19 @@ describe("parseApi", () => {
 
   it("preserves a chained auth block through a round trip", () => {
     const text = serializeApi({
-      schemaVersion: 1, id: "a", name: "A", baseUrl: "https://x",
+      ...emptyApi("a", "A"),
+      baseUrl: "https://x",
       endpoints: [
-        { id: "token", name: "T", method: "POST", path: "/token" },
-        { id: "biz", name: "B", method: "GET", path: "/b",
-          auth: { type: "chained", source: { endpoint: "token" },
-                  inject: { into: "header", name: "Authorization",
-                            template: "Bearer {{value}}" }, retryOn: [401] } },
+        { ...emptyEndpoint("token", "T"), method: "POST", path: "/token" },
+        {
+          ...emptyEndpoint("biz", "B"),
+          path: "/b",
+          auth: {
+            type: "chained", source: { endpoint: "token" },
+            inject: { into: "header", name: "Authorization",
+                      template: "Bearer {{value}}" }, retryOn: [401],
+          },
+        },
       ],
     });
     const back = parseApi(text);
@@ -77,5 +83,33 @@ describe("skeletons", () => {
     const ep = emptyEndpoint("ping", "Ping");
     expect(ep.method).toBe("GET");
     expect(ep.path.startsWith("/")).toBe(true);
+  });
+});
+
+// Pins the field set model.rs always writes (every `#[serde(default)]`
+// field WITHOUT `skip_serializing_if`) so a fresh object already matches
+// every sibling in the file, not just after a save round-trips it through
+// Rust. Fails loudly if a default is ever dropped from either skeleton.
+describe("Rust-always-present fields", () => {
+  it("emptyApi carries every field Api always serializes", () => {
+    const api = emptyApi("new-api", "New API");
+    expect(Object.keys(api)).toEqual([
+      "schemaVersion", "id", "name", "baseUrl",
+      "variables", "environments", "auth", "endpoints",
+    ]);
+    expect(api.variables).toEqual({});
+    expect(api.environments).toEqual([]);
+    expect(api.auth).toEqual({ type: "none" });
+  });
+
+  it("emptyEndpoint carries every field Endpoint always serializes", () => {
+    const ep = emptyEndpoint("ping", "Ping");
+    expect(Object.keys(ep)).toEqual([
+      "id", "name", "method", "path", "headers", "query", "variables", "auth",
+    ]);
+    expect(ep.headers).toEqual({});
+    expect(ep.query).toEqual({});
+    expect(ep.variables).toEqual({});
+    expect(ep.auth).toEqual({ type: "inherit" });
   });
 });

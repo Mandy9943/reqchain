@@ -1,6 +1,8 @@
 /// Every shipped fixture must survive `from_json` -> `to_json_string` unchanged.
-/// The frontend's `serializeApi` writes the same shape, so if this holds and the
-/// TS mirror is complete, a form edit cannot lose a field.
+/// This proves only that Rust's own serializer is stable under a round trip —
+/// it never touches `model.ts`, so it says nothing about whether the TS mirror
+/// is complete. A field added to `model.rs` and never mirrored in `model.ts`
+/// would still pass this test silently.
 #[test]
 fn every_fixture_round_trips_through_the_canonical_serializer() {
     for entry in std::fs::read_dir("../../tests/fixtures").unwrap() {
