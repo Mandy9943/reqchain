@@ -37,6 +37,12 @@
     return ui.selected?.apiId === api.id && ui.selected?.endpointId === null;
   }
 
+  /** Whether this API's editor buffer holds an edit not yet saved to disk. */
+  function isDirty(api: ApiDto): boolean {
+    const buffer = ui.buffers[api.id];
+    return buffer !== undefined && buffer !== api.text;
+  }
+
   // --- Inline "New API" row -------------------------------------------------
   let creatingApi = $state(false);
   let newApiName = $state("");
@@ -197,7 +203,17 @@
   let deleteApiError = $state<string | null>(null);
   let deleteApiBusy = $state(false);
 
+  /** Whether Delete can even be started for this API right now. */
+  function canDeleteApi(api: ApiDto): boolean {
+    // Refuse to start (or open the confirmation for) a delete while a save
+    // for this same file is in flight — see `ui.savingIds`'s doc comment in
+    // state.svelte.ts. Without this, `save_api` could write the file right
+    // back moments after `delete_api` removed it.
+    return !ui.savingIds[api.id];
+  }
+
   function startDeleteApi(api: ApiDto): void {
+    if (!canDeleteApi(api)) return;
     confirmingDeleteApi = api.id;
     deleteApiError = null;
   }
@@ -208,7 +224,12 @@
   }
 
   async function confirmDeleteApi(api: ApiDto): Promise<void> {
+    if (!canDeleteApi(api)) {
+      deleteApiError = "A save is in progress for this API — wait for it to finish.";
+      return;
+    }
     deleteApiBusy = true;
+    ui.deletingIds[api.id] = true;
     deleteApiError = null;
     try {
       await deleteApi(api.id);
@@ -228,6 +249,7 @@
       deleteApiError = e instanceof Error ? e.message : String(e);
     } finally {
       deleteApiBusy = false;
+      delete ui.deletingIds[api.id];
     }
   }
 
@@ -348,6 +370,10 @@
           <button
             type="button"
             class="link-button link-button-danger"
+            disabled={!canDeleteApi(api)}
+            title={canDeleteApi(api)
+              ? undefined
+              : "A save is in progress for this API"}
             onclick={() => startDeleteApi(api)}
           >
             Delete
@@ -360,6 +386,12 @@
               Delete <strong>{api.name}</strong>? This removes the file
               <code>{api.path}</code> from disk — this cannot be undone.
             </p>
+            {#if isDirty(api)}
+              <p class="confirm-text">
+                This API also has unsaved changes in the editor — those go
+                with it too.
+              </p>
+            {/if}
             {#if deleteApiError}
               <p class="inline-error">{deleteApiError}</p>
             {/if}
@@ -367,7 +399,7 @@
               <button
                 type="button"
                 class="danger-button"
-                disabled={deleteApiBusy}
+                disabled={deleteApiBusy || !canDeleteApi(api)}
                 onclick={() => confirmDeleteApi(api)}
               >
                 {deleteApiBusy ? "Deleting…" : "Delete file"}

@@ -75,11 +75,32 @@ fn write_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Rejects an id that could escape `apis_dir()` once turned into a filename
+/// (`<id>.json`, the fallback path both `save_api_inner` and
+/// `delete_api_inner` can end up building). Before this task every id that
+/// reached these functions came from a file the workspace had already
+/// loaded from disk — this is the first path where a user-TYPED name (via
+/// the sidebar's "New API") reaches it. The frontend's `slugify` is a
+/// convenience for that UI, not a security boundary; this is the boundary.
+fn validate_api_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("API id must not be empty".to_string());
+    }
+    if id.contains('/') || id.contains('\\') {
+        return Err(format!("API id `{id}` must not contain a path separator"));
+    }
+    if id.contains("..") {
+        return Err(format!("API id `{id}` must not contain `..`"));
+    }
+    Ok(())
+}
+
 pub async fn save_api_inner(
     state: &AppState,
     api_id: &str,
     text: &str,
 ) -> Result<Vec<DiagnosticDto>, String> {
+    validate_api_id(api_id)?;
     let diags: Vec<DiagnosticDto> = lint_inner(text);
     if diags.iter().any(|d| d.severity == "error") {
         return Ok(diags); // reported, nothing written
@@ -117,6 +138,7 @@ pub async fn save_api_inner(
 /// convention here would silently remove (or fail to remove) the wrong
 /// file whenever they differ.
 pub async fn delete_api_inner(state: &AppState, api_id: &str) -> Result<(), String> {
+    validate_api_id(api_id)?;
     let path = state
         .workspace
         .lock()

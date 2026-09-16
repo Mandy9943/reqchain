@@ -32,6 +32,18 @@ export const ui = $state({
   // clean save. Never implies the buffer itself was touched — reload()
   // never overwrites a dirty buffer.
   diskChanged: {} as Record<string, boolean>,
+  // apiId -> true while a `save_api` (RequestPanel's Save button/Ctrl+S) or
+  // `delete_api` (Sidebar's Delete) call is in flight for that api. Shared
+  // here — not component-local state — because the two actions live in two
+  // different components (RequestPanel, Sidebar) that both write the same
+  // file: without a shared registry, a save in flight when a delete lands
+  // can resurrect a "deleted" file (the save writes it back right after
+  // delete removes it), or a delete in flight when a save lands can drop
+  // the save silently. Both directions are guarded by checking the OTHER
+  // map before starting: `canSave` refuses while `deletingIds` is set, and
+  // Sidebar refuses to start (or confirm) a delete while `savingIds` is set.
+  savingIds: {} as Record<string, boolean>,
+  deletingIds: {} as Record<string, boolean>,
   search: "",
   response: null as RunDto | null,
   runError: null as string | null,

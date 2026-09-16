@@ -14,10 +14,12 @@
   let previewUrl = $state<string | null>(null);
   let previewError = $state<string | null>(null);
   let saveError = $state<string | null>(null);
-  // apiId -> in-flight save. Per-apiId (not a single flag) so saving API A
-  // never blocks — or gets clobbered by — a save of API B started while A
-  // is still pending; a second save of the *same* apiId is refused instead.
-  let savingIds = $state<Record<string, boolean>>({});
+  // In-flight saves live in `ui.savingIds` (state.svelte.ts), not
+  // component-local state: Sidebar's Delete action needs to see them too, to
+  // avoid racing a delete against a save of the same file. Per-apiId (not a
+  // single flag) so saving API A never blocks — or gets clobbered by — a
+  // save of API B started while A is still pending; a second save of the
+  // *same* apiId is refused instead.
   // apiId -> text that was last successfully written to disk by us. Used to
   // adopt the canonical (re-serialized) text once the post-save reload comes
   // back, but only if the user hasn't kept typing in the meantime.
@@ -59,7 +61,7 @@
   const diskChanged = $derived(
     liveApi !== undefined && !!ui.diskChanged[liveApi.id],
   );
-  const saving = $derived(liveApi ? !!savingIds[liveApi.id] : false);
+  const saving = $derived(liveApi ? !!ui.savingIds[liveApi.id] : false);
 
   // Seed the buffer for a newly selected API, without ever clobbering a
   // buffer the user (or task 10's hot-reload logic) already owns. Only
@@ -193,7 +195,10 @@
     const text = ui.buffers[apiId];
     const current = ui.workspace.apis.find((a) => a.id === apiId);
     if (!current || text === undefined || text === current.text) return false;
-    return !savingIds[apiId]; // a save for this API must not already be in flight
+    // A save for this API must not already be in flight, and Sidebar must
+    // not be mid-delete of this same file — otherwise the save could write
+    // the file right back after delete_api removed it.
+    return !ui.savingIds[apiId] && !ui.deletingIds[apiId];
   }
 
   async function handleSave(): Promise<void> {
@@ -208,7 +213,7 @@
     const text = ui.buffers[apiId]!;
 
     const stillSelected = () => selectedApi()?.id === apiId;
-    savingIds[apiId] = true;
+    ui.savingIds[apiId] = true;
     if (stillSelected()) saveError = null;
 
     try {
@@ -240,7 +245,7 @@
         saveError = e instanceof Error ? e.message : String(e);
       }
     } finally {
-      savingIds[apiId] = false;
+      ui.savingIds[apiId] = false;
     }
   }
 

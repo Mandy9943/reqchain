@@ -124,7 +124,52 @@ async fn delete_api_refuses_an_unknown_id_instead_of_deleting_nothing_quietly() 
     let err = commands::delete_api_inner(&state, "nope")
         .await
         .unwrap_err();
-    assert!(err.contains("nope"));
+    // Pins the MECHANISM (an explicit `path_of` miss), not just the
+    // symptom of "the string `nope` shows up somewhere": a regression that
+    // guessed a `nope.json` path and let `remove_file`'s NotFound error
+    // surface would also produce a message containing "nope", so a bare
+    // `contains("nope")` would not have caught it.
+    assert_eq!(err, "API `nope` not found");
+    assert!(state.paths.apis_dir().join("demo.json").exists());
+}
+
+/// The frontend derives an id from a user-typed name via `slugify`, but that
+/// is a UI convenience, not a security boundary — a user-typed name is the
+/// first input that reaches this path at all (every id before this task came
+/// from a file already on disk), so Rust must refuse a hostile id itself
+/// rather than trust the client.
+#[tokio::test]
+async fn save_api_rejects_a_path_traversal_id_and_writes_nothing_outside_the_workspace() {
+    let (_d, state) = state_with("demo.json", GOOD);
+    let evil_id = "../../etc/passwd";
+    let evil = GOOD.replace(r#""id":"demo""#, &format!(r#""id":"{evil_id}""#));
+    let err = commands::save_api_inner(&state, evil_id, &evil)
+        .await
+        .unwrap_err();
+    assert!(err.contains(".."), "unhelpful error: {err}");
+    // Nothing was written outside the workspace's apis dir — this is the
+    // concrete failure a naive `apis_dir().join(format!("{id}.json"))`
+    // fallback would produce for this id (`apis_dir/../../etc/passwd.json`
+    // resolves outside the workspace entirely).
+    assert!(!std::path::Path::new("/etc/passwd.json").exists());
+}
+
+#[tokio::test]
+async fn save_api_rejects_an_empty_id() {
+    let (_d, state) = state_with("demo.json", GOOD);
+    let err = commands::save_api_inner(&state, "", GOOD)
+        .await
+        .unwrap_err();
+    assert!(err.contains("empty"), "unhelpful error: {err}");
+}
+
+#[tokio::test]
+async fn delete_api_rejects_a_path_traversal_id() {
+    let (_d, state) = state_with("demo.json", GOOD);
+    let err = commands::delete_api_inner(&state, "../../etc/passwd")
+        .await
+        .unwrap_err();
+    assert!(err.contains(".."), "unhelpful error: {err}");
     assert!(state.paths.apis_dir().join("demo.json").exists());
 }
 
