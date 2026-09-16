@@ -2,7 +2,7 @@ use crate::auth::{self, AuthError};
 use crate::cache::{now_unix, TokenCache};
 use crate::exec::{AuthStep, ExecError, RunResult, Runner};
 use crate::model::{Api, Auth, AuthExtract, AuthInject, AuthTtl};
-use crate::request::{self, BuildError, EffectiveBody, EffectiveRequest};
+use crate::request::{self, urlencode, BuildError, EffectiveBody, EffectiveRequest};
 use crate::secrets::Secrets;
 use crate::vars::Scope;
 
@@ -20,14 +20,30 @@ pub enum RunError {
     Chain { message: String },
 }
 
-pub struct Executor { runner: Runner, cache: TokenCache, secrets: Secrets }
+pub struct Executor {
+    runner: Runner,
+    cache: TokenCache,
+    secrets: Secrets,
+    derived: Vec<String>,
+}
 
 impl Executor {
     pub fn new(runner: Runner, cache: TokenCache, secrets: Secrets) -> Executor {
-        Executor { runner, cache, secrets }
+        Executor { runner, cache, secrets, derived: Vec::new() }
     }
 
     pub fn cache_mut(&mut self) -> &mut TokenCache { &mut self.cache }
+
+    /// Every token this executor has derived from an auth response. They are not
+    /// in the secret store, so callers must add them to the mask list before
+    /// displaying a request, a response or a shell export.
+    pub fn derived_values(&self) -> Vec<String> { self.derived.clone() }
+
+    fn remember(&mut self, value: &str) {
+        if !value.is_empty() && !self.derived.iter().any(|v| v == value) {
+            self.derived.push(value.to_string());
+        }
+    }
 
     pub async fn run(
         &mut self,
@@ -79,13 +95,12 @@ impl Executor {
         let fingerprint = env.unwrap_or("").to_string();
         let key = TokenCache::key(&api.id, &resolved, &fingerprint);
 
-        let (value, step) = self
+        let (value, mut trace) = self
             .token(api, &source.endpoint, env, &extract, &ttl, &key, visited)
             .await?;
-        let mut trace = vec![step];
 
         let mut attempt = req.clone();
-        inject_value(&mut attempt, &inject, &value);
+        inject_value(&mut attempt, &inject, &value)?;
         let mut res = self.runner.send(&attempt).await?;
         res.effective = attempt;
 
@@ -93,12 +108,12 @@ impl Executor {
             self.cache.invalidate(&key);
             // A fresh chain walk: the previous one is already recorded in `trace`.
             let mut retry_visited = vec![endpoint_id.to_string()];
-            let (fresh, step2) = self
+            let (fresh, steps) = self
                 .token(api, &source.endpoint, env, &extract, &ttl, &key, &mut retry_visited)
                 .await?;
-            trace.push(step2);
+            trace.extend(steps);
             let mut retry = req.clone();
-            inject_value(&mut retry, &inject, &fresh);
+            inject_value(&mut retry, &inject, &fresh)?;
             res = self.runner.send(&retry).await?;
             res.effective = retry;
         }
@@ -117,17 +132,18 @@ impl Executor {
         ttl: &Option<AuthTtl>,
         key: &str,
         visited: &mut Vec<String>,
-    ) -> Result<(String, AuthStep), RunError> {
+    ) -> Result<(String, Vec<AuthStep>), RunError> {
         if let Some(cached) = self.cache.get(key, now_unix()) {
+            self.remember(&cached);
             return Ok((
                 cached,
-                AuthStep {
+                vec![AuthStep {
                     endpoint_id: source_id.to_string(),
                     request: None,
                     status: 0,
                     body: String::new(),
                     from_cache: true,
-                },
+                }],
             ));
         }
 
@@ -140,24 +156,53 @@ impl Executor {
             });
         }
 
-        let res = Box::pin(self.run_inner(api, source_id, env, visited)).await?;
+        let mut res = Box::pin(self.run_inner(api, source_id, env, visited)).await?;
+        // The nested run may itself have been authenticated by a chain: keep its
+        // steps so the whole auth path stays visible, deepest first.
+        let nested = std::mem::take(&mut res.auth_trace);
         let body_text = res.body_text();
+
+        // A failing auth endpoint must be reported as such, not as a missing token.
+        let wants_status = matches!(extract, Some(AuthExtract::Status));
+        if !wants_status && !(200..300).contains(&res.status) {
+            return Err(RunError::Chain {
+                message: format!(
+                    "chained auth: auth endpoint `{source_id}` returned {} — {}",
+                    res.status,
+                    excerpt(&body_text)
+                ),
+            });
+        }
+
         let value = extract_value(&res, &body_text, extract)?;
-        let expires_at = compute_expiry(&body_text, ttl)?;
-        self.cache.put(key, value.clone(), expires_at);
-        let step = AuthStep {
+        // No expiry means no cache: a token we cannot age out would go stale
+        // forever and only a 401 would recover it.
+        if let Some(expires_at) = compute_expiry(&body_text, ttl)? {
+            self.cache.put(key, value.clone(), Some(expires_at));
+        }
+        self.remember(&value);
+        let mut trace = nested;
+        trace.push(AuthStep {
             endpoint_id: source_id.to_string(),
             request: Some(res.effective.clone()),
             status: res.status,
             body: body_text,
             from_cache: false,
-        };
-        Ok((value, step))
+        });
+        Ok((value, trace))
     }
 }
 
 fn default_extract() -> AuthExtract {
     AuthExtract::Body { json_path: Some("$.access_token".into()), xpath: None, regex: None }
+}
+
+fn excerpt(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() { return "empty response body".to_string() }
+    let mut out: String = trimmed.chars().take(200).collect();
+    if trimmed.chars().count() > 200 { out.push_str("...") }
+    out
 }
 
 fn json_keys(body: &str) -> String {
@@ -196,7 +241,12 @@ fn extract_value(
                 })?;
             apply_regex(&raw, regex.as_deref())
         }
-        AuthExtract::Body { json_path, xpath: _, regex } => {
+        AuthExtract::Body { json_path, xpath, regex } => {
+            if xpath.is_some() {
+                return Err(RunError::Chain {
+                    message: "chained auth: xpath extraction is not implemented yet — use jsonPath or regex".into(),
+                });
+            }
             if let Some(rx) = regex {
                 return apply_regex(body, Some(&rx));
             }
@@ -268,29 +318,51 @@ fn compute_expiry(body: &str, ttl: &Option<AuthTtl>) -> Result<Option<u64>, RunE
     }
 }
 
-fn inject_value(req: &mut EffectiveRequest, inject: &AuthInject, value: &str) {
+fn inject_value(
+    req: &mut EffectiveRequest,
+    inject: &AuthInject,
+    value: &str,
+) -> Result<(), RunError> {
     match inject {
         AuthInject::Header { name, template } => {
             let rendered = template.replace("{{value}}", value);
             req.headers.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
             req.headers.push((name.clone(), rendered));
+            Ok(())
         }
         AuthInject::Query { name, template } => {
             let rendered = template.replace("{{value}}", value);
             let sep = if req.url.contains('?') { '&' } else { '?' };
             req.url.push(sep);
-            req.url.push_str(&format!("{name}={rendered}"));
+            req.url.push_str(&format!("{}={}", urlencode(name), urlencode(&rendered)));
+            Ok(())
         }
         AuthInject::Body { pointer, template } => {
             let rendered = template.replace("{{value}}", value);
-            if let Some(EffectiveBody::Text { content, .. }) = &mut req.body {
-                if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(content) {
-                    if let Some(slot) = json.pointer_mut(pointer) {
-                        *slot = serde_json::Value::String(rendered);
-                        *content = json.to_string();
-                    }
-                }
-            }
+            let Some(EffectiveBody::Text { content, .. }) = &mut req.body else {
+                return Err(RunError::Chain {
+                    message: format!(
+                        "chained auth: cannot inject the token at `{pointer}` — the request has no JSON body"
+                    ),
+                });
+            };
+            let mut json: serde_json::Value =
+                serde_json::from_str(content).map_err(|e| RunError::Chain {
+                    message: format!(
+                        "chained auth: cannot inject the token at `{pointer}` — the request body is not JSON ({e})"
+                    ),
+                })?;
+            let Some(slot) = json.pointer_mut(pointer) else {
+                return Err(RunError::Chain {
+                    message: format!(
+                        "chained auth: JSON pointer `{pointer}` matches nothing in the request body (keys: {}) — the request would go out unauthenticated",
+                        json_keys(content)
+                    ),
+                });
+            };
+            *slot = serde_json::Value::String(rendered);
+            *content = json.to_string();
+            Ok(())
         }
     }
 }

@@ -36,7 +36,18 @@ impl EffectiveRequest {
         EffectiveRequest {
             method: self.method,
             url: mask(&self.url),
-            headers: self.headers.iter().map(|(k, v)| (k.clone(), mask(v))).collect(),
+            headers: self
+                .headers
+                .iter()
+                .map(|(k, v)| {
+                    let masked = mask(v);
+                    if k.eq_ignore_ascii_case("authorization") {
+                        (k.clone(), redact_credential(&masked))
+                    } else {
+                        (k.clone(), masked)
+                    }
+                })
+                .collect(),
             body: self.body.as_ref().map(|b| match b {
                 EffectiveBody::Text { content_type, content } =>
                     EffectiveBody::Text { content_type: content_type.clone(), content: mask(content) },
@@ -127,7 +138,16 @@ fn interpolate_json(value: &serde_json::Value, scope: &Scope) -> Result<serde_js
     })
 }
 
-fn urlencode(s: &str) -> String {
+/// Keeps the auth scheme of an `Authorization` header and hides the credential:
+/// `Basic <base64>` becomes `Basic ***`. A value with no scheme is hidden whole.
+fn redact_credential(value: &str) -> String {
+    match value.split_once(' ') {
+        Some((scheme, _)) if !scheme.is_empty() => format!("{scheme} ***"),
+        _ => "***".to_string(),
+    }
+}
+
+pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

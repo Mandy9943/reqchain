@@ -63,7 +63,10 @@
           "name": "Authorization",
           "template": "Bearer {{value}}"
         },
-        "retryOn": [401, 403]
+        "retryOn": [
+          401,
+          403
+        ]
       },
       "body": {
         "type": "json",
@@ -116,6 +119,162 @@
         "inject": {
           "into": "query",
           "name": "access_token"
+        }
+      }
+    },
+    {
+      "id": "body-business",
+      "name": "Body business",
+      "method": "POST",
+      "path": "/body-business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token"
+        },
+        "extract": {
+          "from": "body",
+          "jsonPath": "$.access_token"
+        },
+        "inject": {
+          "into": "body",
+          "pointer": "/token",
+          "template": "{{value}}"
+        }
+      },
+      "body": {
+        "type": "json",
+        "content": {
+          "doc": "{{documento}}",
+          "token": ""
+        }
+      }
+    },
+    {
+      "id": "bad-pointer-business",
+      "name": "Bad pointer business",
+      "method": "POST",
+      "path": "/bad-pointer-business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token"
+        },
+        "extract": {
+          "from": "body",
+          "jsonPath": "$.access_token"
+        },
+        "inject": {
+          "into": "body",
+          "pointer": "/nope/deep"
+        }
+      },
+      "body": {
+        "type": "json",
+        "content": {
+          "doc": "{{documento}}"
+        }
+      }
+    },
+    {
+      "id": "token-noexp",
+      "name": "Token without expiry",
+      "method": "POST",
+      "path": "/token-noexp",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "noexp-business",
+      "name": "No expiry business",
+      "method": "GET",
+      "path": "/noexp-business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token-noexp"
+        },
+        "extract": {
+          "from": "body",
+          "jsonPath": "$.access_token"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
+        }
+      }
+    },
+    {
+      "id": "token-fail",
+      "name": "Failing token",
+      "method": "POST",
+      "path": "/token-fail",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "fail-business",
+      "name": "Fail business",
+      "method": "GET",
+      "path": "/fail-business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token-fail"
+        },
+        "extract": {
+          "from": "body",
+          "jsonPath": "$.access_token"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
+        }
+      }
+    },
+    {
+      "id": "xpath-business",
+      "name": "Xpath business",
+      "method": "GET",
+      "path": "/xpath-business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token"
+        },
+        "extract": {
+          "from": "body",
+          "xpath": "//token"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
         }
       }
     }

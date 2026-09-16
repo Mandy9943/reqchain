@@ -46,3 +46,37 @@ fn none_overrides_inherited_auth() {
 fn chained_is_left_for_the_chain_resolver() {
     assert_eq!(header_of("chained", Secrets::empty(), "authorization"), None);
 }
+
+#[test]
+fn masked_hides_the_credential_of_an_authorization_header_but_keeps_the_scheme() {
+    let api = Api::from_json(FIXTURE).unwrap();
+    let secrets = Secrets::from_map([
+        ("GW_USER".into(), "alice".into()),
+        ("GW_PASS".into(), "hunter2".into()),
+    ]);
+    let ep = api.endpoint("basic").unwrap();
+    let scope = Scope::new(&api, ep, Some("test"), &secrets);
+    let mut req = request::build(&api, ep, &scope).unwrap();
+    auth::apply_static(&api, ep, &scope, &mut req).unwrap();
+
+    // Not in the mask list: base64 hides the secret from a literal match.
+    let masked = req.masked(&[]);
+    let value = masked
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        .map(|(_, v)| v.clone());
+    assert_eq!(value.as_deref(), Some("Basic ***"));
+
+    let ep = api.endpoint("bearer").unwrap();
+    let scope = Scope::new(&api, ep, Some("test"), &secrets);
+    let mut req = request::build(&api, ep, &scope).unwrap();
+    auth::apply_static(&api, ep, &scope, &mut req).unwrap();
+    let masked = req.masked(&[]);
+    let value = masked
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        .map(|(_, v)| v.clone());
+    assert_eq!(value.as_deref(), Some("Bearer ***"));
+}
