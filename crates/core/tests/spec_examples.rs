@@ -1,0 +1,41 @@
+use reqchain_core::validate::{validate_text, Severity};
+
+/// Every fenced ```json block in SPEC.md that looks like a complete API file.
+fn spec_examples() -> Vec<String> {
+    let spec = include_str!("../../../SPEC.md");
+    let mut out = Vec::new();
+    let mut rest = spec;
+    while let Some(start) = rest.find("```json") {
+        let after = &rest[start + 7..];
+        let Some(end) = after.find("```") else { break };
+        let block = after[..end].trim().to_string();
+        if block.contains("\"schemaVersion\"") { out.push(block) }
+        rest = &after[end + 3..];
+    }
+    out
+}
+
+#[test]
+fn spec_contains_complete_examples() {
+    assert!(spec_examples().len() >= 2, "SPEC.md must show at least the two acceptance cases");
+}
+
+#[test]
+fn every_spec_example_validates() {
+    for (i, example) in spec_examples().iter().enumerate() {
+        let errors: Vec<_> = validate_text(example)
+            .into_iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "SPEC.md example {i} is invalid: {errors:?}");
+    }
+}
+
+#[test]
+fn the_odilo_fixture_validates() {
+    let errors: Vec<_> = validate_text(include_str!("../../../tests/fixtures/odilo.json"))
+        .into_iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+}

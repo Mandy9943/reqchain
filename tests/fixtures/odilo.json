@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "odilo",
+  "name": "Odilo (test)",
+  "baseUrl": "https://api.test-ceibal.edu.uy",
+  "variables": {},
+  "environments": [
+    {
+      "name": "test",
+      "variables": {
+        "documento": "12345678"
+      }
+    }
+  ],
+  "auth": {
+    "type": "none"
+  },
+  "endpoints": [
+    {
+      "id": "odilo-user",
+      "name": "Odilo User",
+      "method": "GET",
+      "path": "/odilo/user",
+      "headers": {
+        "token": "{{secret:API_TOKEN}}",
+        "user": "{{documento}}"
+      },
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "computed",
+        "name": "hash",
+        "expression": "md5(now(\"YYYYMMDD\") + {{documento}})"
+      }
+    }
+  ]
+}
