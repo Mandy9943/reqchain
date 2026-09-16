@@ -9,10 +9,20 @@ pub enum BuildError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectiveBody {
-    Text { content_type: String, content: String },
-    Form { fields: Vec<(String, String)> },
-    Multipart { fields: Vec<(String, String)>, files: Vec<(String, String)> },
-    Binary { path: String },
+    Text {
+        content_type: String,
+        content: String,
+    },
+    Form {
+        fields: Vec<(String, String)>,
+    },
+    Multipart {
+        fields: Vec<(String, String)>,
+        files: Vec<(String, String)>,
+    },
+    Binary {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +39,9 @@ impl EffectiveRequest {
         let mask = |s: &String| {
             let mut out = s.clone();
             for secret in secrets {
-                if !secret.is_empty() { out = out.replace(secret.as_str(), "***") }
+                if !secret.is_empty() {
+                    out = out.replace(secret.as_str(), "***")
+                }
             }
             out
         };
@@ -49,10 +61,16 @@ impl EffectiveRequest {
                 })
                 .collect(),
             body: self.body.as_ref().map(|b| match b {
-                EffectiveBody::Text { content_type, content } =>
-                    EffectiveBody::Text { content_type: content_type.clone(), content: mask(content) },
-                EffectiveBody::Form { fields } =>
-                    EffectiveBody::Form { fields: fields.iter().map(|(k, v)| (k.clone(), mask(v))).collect() },
+                EffectiveBody::Text {
+                    content_type,
+                    content,
+                } => EffectiveBody::Text {
+                    content_type: content_type.clone(),
+                    content: mask(content),
+                },
+                EffectiveBody::Form { fields } => EffectiveBody::Form {
+                    fields: fields.iter().map(|(k, v)| (k.clone(), mask(v))).collect(),
+                },
                 EffectiveBody::Multipart { fields, files } => EffectiveBody::Multipart {
                     fields: fields.iter().map(|(k, v)| (k.clone(), mask(v))).collect(),
                     files: files.clone(),
@@ -63,7 +81,11 @@ impl EffectiveRequest {
     }
 }
 
-pub fn build(api: &Api, endpoint: &Endpoint, scope: &Scope) -> Result<EffectiveRequest, BuildError> {
+pub fn build(
+    api: &Api,
+    endpoint: &Endpoint,
+    scope: &Scope,
+) -> Result<EffectiveRequest, BuildError> {
     let base = scope.interpolate(&api.base_url)?;
     let path = scope.interpolate(&endpoint.path)?;
     let mut url = format!("{}{}", base.trim_end_matches('/'), path);
@@ -71,7 +93,11 @@ pub fn build(api: &Api, endpoint: &Endpoint, scope: &Scope) -> Result<EffectiveR
     if !endpoint.query.is_empty() {
         let mut pairs = Vec::new();
         for (k, v) in &endpoint.query {
-            pairs.push(format!("{}={}", urlencode(k), urlencode(&scope.interpolate(v)?)));
+            pairs.push(format!(
+                "{}={}",
+                urlencode(k),
+                urlencode(&scope.interpolate(v)?)
+            ));
         }
         url.push('?');
         url.push_str(&pairs.join("&"));
@@ -99,32 +125,53 @@ pub fn build(api: &Api, endpoint: &Endpoint, scope: &Scope) -> Result<EffectiveR
         }),
         Some(Body::Form { fields }) => {
             let mut out = Vec::new();
-            for (k, v) in fields { out.push((k.clone(), scope.interpolate(v)?)) }
+            for (k, v) in fields {
+                out.push((k.clone(), scope.interpolate(v)?))
+            }
             Some(EffectiveBody::Form { fields: out })
         }
         Some(Body::Multipart { fields, files }) => {
             let mut f = Vec::new();
-            for (k, v) in fields { f.push((k.clone(), scope.interpolate(v)?)) }
+            for (k, v) in fields {
+                f.push((k.clone(), scope.interpolate(v)?))
+            }
             let mut fl = Vec::new();
-            for (k, v) in files { fl.push((k.clone(), scope.interpolate(v)?)) }
-            Some(EffectiveBody::Multipart { fields: f, files: fl })
+            for (k, v) in files {
+                fl.push((k.clone(), scope.interpolate(v)?))
+            }
+            Some(EffectiveBody::Multipart {
+                fields: f,
+                files: fl,
+            })
         }
-        Some(Body::Binary { path }) => Some(EffectiveBody::Binary { path: scope.interpolate(path)? }),
+        Some(Body::Binary { path }) => Some(EffectiveBody::Binary {
+            path: scope.interpolate(path)?,
+        }),
     };
 
-    Ok(EffectiveRequest { method: endpoint.method, url, headers, body })
+    Ok(EffectiveRequest {
+        method: endpoint.method,
+        url,
+        headers,
+        body,
+    })
 }
 
 /// Interpolates `{{var}}` templates inside a JSON value tree, walking into string leaves
 /// (and object keys) only — numbers, booleans and null pass through untouched. This lets
 /// `serde_json` do the escaping, so an interpolated value can never break out of its string
 /// literal or inject sibling keys.
-fn interpolate_json(value: &serde_json::Value, scope: &Scope) -> Result<serde_json::Value, VarError> {
+fn interpolate_json(
+    value: &serde_json::Value,
+    scope: &Scope,
+) -> Result<serde_json::Value, VarError> {
     Ok(match value {
         serde_json::Value::String(s) => serde_json::Value::String(scope.interpolate(s)?),
         serde_json::Value::Array(items) => {
             let mut out = Vec::with_capacity(items.len());
-            for item in items { out.push(interpolate_json(item, scope)?) }
+            for item in items {
+                out.push(interpolate_json(item, scope)?)
+            }
             serde_json::Value::Array(out)
         }
         serde_json::Value::Object(map) => {
@@ -151,7 +198,9 @@ pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }

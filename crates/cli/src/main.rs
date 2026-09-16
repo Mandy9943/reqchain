@@ -44,8 +44,12 @@ async fn main() -> ExitCode {
     match cli.command {
         Cmd::List => list(&paths),
         Cmd::Validate { files } => validate_cmd(&paths, files),
-        Cmd::Run { api, endpoint, env, print_command } =>
-            run(&paths, &api, &endpoint, env.as_deref(), print_command).await,
+        Cmd::Run {
+            api,
+            endpoint,
+            env,
+            print_command,
+        } => run(&paths, &api, &endpoint, env.as_deref(), print_command).await,
     }
 }
 
@@ -60,7 +64,11 @@ fn list(paths: &Paths) -> ExitCode {
     for err in &ws.errors {
         eprintln!("error: {}: {}", err.path.display(), err.message);
     }
-    if ws.errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) }
+    if ws.errors.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn validate_cmd(paths: &Paths, files: Vec<PathBuf>) -> ExitCode {
@@ -86,7 +94,10 @@ fn validate_cmd(paths: &Paths, files: Vec<PathBuf>) -> ExitCode {
         };
         let diags = validate::validate_text(&text);
         for d in &diags {
-            let label = match d.severity { Severity::Error => "error", Severity::Warning => "warning" };
+            let label = match d.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+            };
             println!("{}: {}: {} at {}", file.display(), label, d.message, d.path);
         }
         if diags.iter().any(|d| d.severity == Severity::Error) {
@@ -95,7 +106,11 @@ fn validate_cmd(paths: &Paths, files: Vec<PathBuf>) -> ExitCode {
             println!("{}: ok", file.display());
         }
     }
-    if failed { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    if failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 async fn run(
@@ -109,14 +124,22 @@ async fn run(
     let Some(api) = ws.api(api_id) else {
         eprintln!(
             "error: API `{api_id}` not found. Available: {}",
-            ws.apis.iter().map(|a| a.id.as_str()).collect::<Vec<_>>().join(", ")
+            ws.apis
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         return ExitCode::from(3);
     };
     if api.endpoint(endpoint_id).is_none() {
         eprintln!(
             "error: endpoint `{endpoint_id}` not found in `{api_id}`. Available: {}",
-            api.endpoints.iter().map(|e| e.id.as_str()).collect::<Vec<_>>().join(", ")
+            api.endpoints
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         return ExitCode::from(3);
     }
@@ -189,7 +212,9 @@ async fn run(
 fn mask_all(text: &str, mask: &[String]) -> String {
     let mut out = text.to_string();
     for value in mask {
-        if !value.is_empty() { out = out.replace(value.as_str(), "***"); }
+        if !value.is_empty() {
+            out = out.replace(value.as_str(), "***");
+        }
     }
     out
 }

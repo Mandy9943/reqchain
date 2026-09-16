@@ -9,7 +9,9 @@ fn spec_examples() -> Vec<String> {
         let after = &rest[start + 7..];
         let Some(end) = after.find("```") else { break };
         let block = after[..end].trim().to_string();
-        if block.contains("\"schemaVersion\"") { out.push(block) }
+        if block.contains("\"schemaVersion\"") {
+            out.push(block)
+        }
         rest = &after[end + 3..];
     }
     out
@@ -17,7 +19,10 @@ fn spec_examples() -> Vec<String> {
 
 #[test]
 fn spec_contains_complete_examples() {
-    assert!(spec_examples().len() >= 2, "SPEC.md must show at least the two acceptance cases");
+    assert!(
+        spec_examples().len() >= 2,
+        "SPEC.md must show at least the two acceptance cases"
+    );
 }
 
 #[test]
@@ -27,7 +32,10 @@ fn every_spec_example_validates() {
             .into_iter()
             .filter(|d| d.severity == Severity::Error)
             .collect();
-        assert!(errors.is_empty(), "SPEC.md example {i} is invalid: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "SPEC.md example {i} is invalid: {errors:?}"
+        );
     }
 }
 
@@ -36,8 +44,14 @@ fn every_spec_example_validates() {
 #[test]
 fn spec_examples_match_their_fixtures() {
     let fixtures = [
-        ("tests/fixtures/ceibal-gateway-test.json", include_str!("../../../tests/fixtures/ceibal-gateway-test.json")),
-        ("tests/fixtures/odilo.json", include_str!("../../../tests/fixtures/odilo.json")),
+        (
+            "tests/fixtures/ceibal-gateway-test.json",
+            include_str!("../../../tests/fixtures/ceibal-gateway-test.json"),
+        ),
+        (
+            "tests/fixtures/odilo.json",
+            include_str!("../../../tests/fixtures/odilo.json"),
+        ),
     ];
     let examples = spec_examples();
     assert_eq!(

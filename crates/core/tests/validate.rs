@@ -3,13 +3,21 @@ use reqchain_core::validate::{validate_text, Diagnostic, Severity};
 const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
 
 fn errors(diags: &[Diagnostic]) -> Vec<String> {
-    diags.iter().filter(|d| d.severity == Severity::Error).map(|d| d.message.clone()).collect()
+    diags
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.message.clone())
+        .collect()
 }
 
 #[test]
 fn the_acceptance_fixture_is_valid() {
     let diags = validate_text(GOOD);
-    assert!(errors(&diags).is_empty(), "unexpected errors: {:?}", errors(&diags));
+    assert!(
+        errors(&diags).is_empty(),
+        "unexpected errors: {:?}",
+        errors(&diags)
+    );
 }
 
 #[test]
@@ -30,7 +38,10 @@ fn reports_a_chained_auth_pointing_at_a_missing_endpoint() {
 fn reports_an_unknown_variable() {
     let bad = GOOD.replace("{{documento}}", "{{documentoo}}");
     let msgs = errors(&validate_text(&bad));
-    assert!(msgs.iter().any(|m| m.contains("documentoo")), "got: {msgs:?}");
+    assert!(
+        msgs.iter().any(|m| m.contains("documentoo")),
+        "got: {msgs:?}"
+    );
 }
 
 #[test]
@@ -55,10 +66,25 @@ fn warns_but_does_not_fail_when_extract_relies_on_the_default() {
     let text = include_str!("../../../tests/fixtures/chain-default-extract.json")
         .replace("BASE_URL", "https://example.test");
     let diags = validate_text(&text);
-    assert!(errors(&diags).is_empty(), "defaults are legal: {:?}", errors(&diags));
-    let warnings: Vec<_> = diags.iter().filter(|d| d.severity == Severity::Warning).collect();
-    assert!(warnings.iter().any(|w| w.message.contains("$.access_token")), "got: {warnings:?}");
-    assert!(warnings.iter().any(|w| w.message.contains("$.expires_in")), "got: {warnings:?}");
+    assert!(
+        errors(&diags).is_empty(),
+        "defaults are legal: {:?}",
+        errors(&diags)
+    );
+    let warnings: Vec<_> = diags
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.message.contains("$.access_token")),
+        "got: {warnings:?}"
+    );
+    assert!(
+        warnings.iter().any(|w| w.message.contains("$.expires_in")),
+        "got: {warnings:?}"
+    );
 }
 
 #[test]
@@ -74,7 +100,10 @@ fn reports_a_chain_deeper_than_the_runtime_allows() {
     let text = include_str!("../../../tests/fixtures/chain-too-deep.json")
         .replace("BASE_URL", "https://example.test");
     let msgs = errors(&validate_text(&text));
-    assert!(msgs.iter().any(|m| m.contains("deeper than")), "got: {msgs:?}");
+    assert!(
+        msgs.iter().any(|m| m.contains("deeper than")),
+        "got: {msgs:?}"
+    );
 }
 
 #[test]
@@ -87,7 +116,8 @@ fn reports_xpath_extraction_as_an_error_not_a_warning() {
     let diags = validate_text(&bad);
     let errs = errors(&diags);
     assert!(
-        errs.iter().any(|m| m.contains("xpath extraction is not implemented yet — use jsonPath or regex")),
+        errs.iter()
+            .any(|m| m.contains("xpath extraction is not implemented yet — use jsonPath or regex")),
         "got: {errs:?}"
     );
 }
@@ -98,7 +128,8 @@ fn fixtures_satisfy_the_published_json_schema() {
         serde_json::from_str(include_str!("../../../schema/reqchain-api.schema.json")).unwrap();
     let validator = jsonschema::validator_for(&schema).expect("schema itself must be valid");
 
-    let fixtures_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let fixtures_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     let mut checked = 0;
     for entry in std::fs::read_dir(&fixtures_dir).expect("fixtures dir must exist") {
         let path = entry.expect("readable dir entry").path();
@@ -107,9 +138,19 @@ fn fixtures_satisfy_the_published_json_schema() {
         }
         let text = std::fs::read_to_string(&path).expect("readable fixture");
         let instance: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let errors: Vec<String> = validator.iter_errors(&instance).map(|e| e.to_string()).collect();
-        assert!(errors.is_empty(), "{} violates schema: {errors:?}", path.display());
+        let errors: Vec<String> = validator
+            .iter_errors(&instance)
+            .map(|e| e.to_string())
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "{} violates schema: {errors:?}",
+            path.display()
+        );
         checked += 1;
     }
-    assert!(checked >= 9, "expected at least 9 fixtures to be checked, found {checked}");
+    assert!(
+        checked >= 9,
+        "expected at least 9 fixtures to be checked, found {checked}"
+    );
 }

@@ -14,7 +14,10 @@ pub fn to_shell_command(req: &EffectiveRequest) -> String {
     }
     match &req.body {
         None => {}
-        Some(EffectiveBody::Text { content_type, content }) => {
+        Some(EffectiveBody::Text {
+            content_type,
+            content,
+        }) => {
             parts.push("-H".into());
             parts.push(q(&format!("content-type: {content_type}")));
             parts.push("--data".into());
@@ -27,8 +30,14 @@ pub fn to_shell_command(req: &EffectiveRequest) -> String {
             }
         }
         Some(EffectiveBody::Multipart { fields, files }) => {
-            for (k, v) in fields { parts.push("-F".into()); parts.push(q(&format!("{k}={v}"))) }
-            for (k, p) in files { parts.push("-F".into()); parts.push(q(&format!("{k}=@{p}"))) }
+            for (k, v) in fields {
+                parts.push("-F".into());
+                parts.push(q(&format!("{k}={v}")))
+            }
+            for (k, p) in files {
+                parts.push("-F".into());
+                parts.push(q(&format!("{k}=@{p}")))
+            }
         }
         Some(EffectiveBody::Binary { path }) => {
             parts.push("--data-binary".into());

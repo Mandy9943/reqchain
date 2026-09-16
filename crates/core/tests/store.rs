@@ -30,7 +30,11 @@ fn one_broken_file_does_not_hide_the_others() {
     assert_eq!(ws.errors.len(), 1);
     let err = &ws.errors[0];
     assert!(err.path.ends_with("broken.json"));
-    assert!(err.message.contains("line 1"), "error must locate the problem: {}", err.message);
+    assert!(
+        err.message.contains("line 1"),
+        "error must locate the problem: {}",
+        err.message
+    );
 }
 
 #[test]

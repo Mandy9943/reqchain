@@ -14,7 +14,10 @@ struct Entry {
 }
 
 #[derive(Debug, Default)]
-pub struct TokenCache { entries: BTreeMap<String, Entry>, file: Option<PathBuf> }
+pub struct TokenCache {
+    entries: BTreeMap<String, Entry>,
+    file: Option<PathBuf>,
+}
 
 pub fn now_unix() -> u64 {
     std::time::SystemTime::now()
@@ -24,7 +27,9 @@ pub fn now_unix() -> u64 {
 }
 
 impl TokenCache {
-    pub fn in_memory() -> TokenCache { TokenCache::default() }
+    pub fn in_memory() -> TokenCache {
+        TokenCache::default()
+    }
 
     pub fn persistent(paths: &Paths) -> TokenCache {
         let file = paths.cache_file();
@@ -32,7 +37,10 @@ impl TokenCache {
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
-        TokenCache { entries, file: Some(file) }
+        TokenCache {
+            entries,
+            file: Some(file),
+        }
     }
 
     pub fn key(api_id: &str, auth: &Auth, scope_fingerprint: &str) -> String {
@@ -53,14 +61,21 @@ impl TokenCache {
     }
 
     pub fn put(&mut self, key: &str, value: String, expires_at: Option<u64>) {
-        self.entries.insert(key.to_string(), Entry { value, expires_at });
+        self.entries
+            .insert(key.to_string(), Entry { value, expires_at });
     }
 
-    pub fn invalidate(&mut self, key: &str) { self.entries.remove(key); }
+    pub fn invalidate(&mut self, key: &str) {
+        self.entries.remove(key);
+    }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let Some(file) = &self.file else { return Ok(()) };
-        if let Some(parent) = file.parent() { std::fs::create_dir_all(parent)? }
+        let Some(file) = &self.file else {
+            return Ok(());
+        };
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)?
+        }
         let text = serde_json::to_string_pretty(&self.entries).unwrap_or_else(|_| "{}".into());
         #[cfg(unix)]
         {

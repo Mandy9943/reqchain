@@ -2,17 +2,32 @@ use crate::expr::SUPPORTED;
 use crate::model::{Api, Auth, AuthExtract, Body, Endpoint};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity { Error, Warning }
+pub enum Severity {
+    Error,
+    Warning,
+}
 
 #[derive(Debug, Clone)]
-pub struct Diagnostic { pub severity: Severity, pub path: String, pub message: String }
+pub struct Diagnostic {
+    pub severity: Severity,
+    pub path: String,
+    pub message: String,
+}
 
 impl Diagnostic {
     fn error(path: impl Into<String>, message: impl Into<String>) -> Diagnostic {
-        Diagnostic { severity: Severity::Error, path: path.into(), message: message.into() }
+        Diagnostic {
+            severity: Severity::Error,
+            path: path.into(),
+            message: message.into(),
+        }
     }
     fn warning(path: impl Into<String>, message: impl Into<String>) -> Diagnostic {
-        Diagnostic { severity: Severity::Warning, path: path.into(), message: message.into() }
+        Diagnostic {
+            severity: Severity::Warning,
+            path: path.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -29,7 +44,10 @@ pub fn validate_api(api: &Api) -> Vec<Diagnostic> {
     for (i, ep) in api.endpoints.iter().enumerate() {
         let base = format!("$.endpoints[{i}]");
         if !seen.insert(ep.id.clone()) {
-            out.push(Diagnostic::error(format!("{base}.id"), format!("duplicate endpoint id `{}`", ep.id)));
+            out.push(Diagnostic::error(
+                format!("{base}.id"),
+                format!("duplicate endpoint id `{}`", ep.id),
+            ));
         }
         check_variables(api, ep, &base, &mut out);
         check_auth(api, ep, &base, &mut out);
@@ -51,13 +69,18 @@ fn referenced_vars(text: &str) -> Vec<String> {
 }
 
 fn known_var(api: &Api, ep: &Endpoint, name: &str) -> bool {
-    if name == "value" { return true } // injection templates
+    if name == "value" {
+        return true;
+    } // injection templates
     if let Some(secret) = name.strip_prefix("secret:") {
         // Whether the secret exists is a runtime concern, not a file concern.
         return !secret.trim().is_empty();
     }
     ep.variables.contains_key(name)
-        || api.environments.iter().any(|e| e.variables.contains_key(name))
+        || api
+            .environments
+            .iter()
+            .any(|e| e.variables.contains_key(name))
         || api.variables.contains_key(name)
 }
 
@@ -111,7 +134,12 @@ fn check_auth(api: &Api, ep: &Endpoint, base: &str, out: &mut Vec<Diagnostic>) {
                 }
             }
         }
-        Auth::Chained { source, extract, ttl, .. } => {
+        Auth::Chained {
+            source,
+            extract,
+            ttl,
+            ..
+        } => {
             if api.endpoint(&source.endpoint).is_none() {
                 out.push(Diagnostic::error(
                     format!("{base}.auth.source.endpoint"),
@@ -139,7 +167,10 @@ fn check_auth(api: &Api, ep: &Endpoint, base: &str, out: &mut Vec<Diagnostic>) {
                     ),
                 ));
             }
-            if let Some(AuthExtract::Body { json_path: Some(p), .. }) = extract {
+            if let Some(AuthExtract::Body {
+                json_path: Some(p), ..
+            }) = extract
+            {
                 if serde_json_path::JsonPath::parse(p).is_err() {
                     out.push(Diagnostic::error(
                         format!("{base}.auth.extract.jsonPath"),
@@ -163,7 +194,9 @@ fn function_names(expression: &str) -> Vec<String> {
     let bytes = expression.as_bytes();
     let mut out = Vec::new();
     for end in 0..bytes.len() {
-        if bytes[end] != b'(' { continue }
+        if bytes[end] != b'(' {
+            continue;
+        }
         let mut start = end;
         while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
             start -= 1;
@@ -189,7 +222,9 @@ fn check_cycles(api: &Api, out: &mut Vec<Diagnostic>) {
                 break;
             }
             path.push(source.endpoint.clone());
-            let Some(next) = api.endpoint(&source.endpoint) else { break };
+            let Some(next) = api.endpoint(&source.endpoint) else {
+                break;
+            };
             current = next.clone();
             if path.len() > crate::chain::MAX_DEPTH {
                 out.push(Diagnostic::error(

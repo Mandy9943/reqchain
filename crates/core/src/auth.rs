@@ -42,11 +42,16 @@ pub fn apply_static(
         Auth::Basic { username, password } => {
             let user = scope.interpolate(username)?;
             let pass = scope.interpolate(password)?;
-            let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
+            let encoded =
+                base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
             set_header(req, "Authorization", format!("Basic {encoded}"));
         }
         Auth::Bearer { token } => {
-            set_header(req, "Authorization", format!("Bearer {}", scope.interpolate(token)?));
+            set_header(
+                req,
+                "Authorization",
+                format!("Bearer {}", scope.interpolate(token)?),
+            );
         }
         Auth::Header { headers } => {
             for (k, v) in headers {

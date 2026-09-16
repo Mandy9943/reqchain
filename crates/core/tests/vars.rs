@@ -35,7 +35,10 @@ fn interpolates_multiple_occurrences_and_surrounding_text() {
     let ep = api.endpoint("probe").unwrap();
     let secrets = Secrets::empty();
     let scope = Scope::new(&api, ep, Some("test"), &secrets);
-    assert_eq!(scope.interpolate("a/{{what}}/b/{{what}}").unwrap(), "a/api/b/api");
+    assert_eq!(
+        scope.interpolate("a/{{what}}/b/{{what}}").unwrap(),
+        "a/api/b/api"
+    );
 }
 
 #[test]
@@ -64,7 +67,10 @@ fn missing_secret_names_the_store() {
     let ep = api.endpoint("probe").unwrap();
     let secrets = Secrets::empty();
     let scope = Scope::new(&api, ep, Some("test"), &secrets);
-    let err = scope.interpolate("{{secret:ABSENT}}").unwrap_err().to_string();
+    let err = scope
+        .interpolate("{{secret:ABSENT}}")
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("ABSENT"), "got: {err}");
     assert!(err.contains("secret"), "got: {err}");
 }

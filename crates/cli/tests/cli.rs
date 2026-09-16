@@ -5,20 +5,28 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
 const CHAIN: &str = include_str!("../../../tests/fixtures/chain.json");
 
-fn bin() -> Command { Command::new(env!("CARGO_BIN_EXE_reqchain")) }
+fn bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_reqchain"))
+}
 
 fn workspace_with(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let apis = dir.path().join("workspace/apis");
     std::fs::create_dir_all(&apis).unwrap();
-    for (name, content) in files { std::fs::write(apis.join(name), content).unwrap() }
+    for (name, content) in files {
+        std::fs::write(apis.join(name), content).unwrap()
+    }
     dir
 }
 
 #[test]
 fn list_prints_apis_and_endpoints() {
     let dir = workspace_with(&[("a.json", GOOD)]);
-    let out = bin().arg("list").env("REQCHAIN_DIR", dir.path()).output().unwrap();
+    let out = bin()
+        .arg("list")
+        .env("REQCHAIN_DIR", dir.path())
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success());
     assert!(text.contains("ceibal-gateway-test"));
@@ -28,15 +36,27 @@ fn list_prints_apis_and_endpoints() {
 #[test]
 fn validate_succeeds_on_a_good_file() {
     let dir = workspace_with(&[("a.json", GOOD)]);
-    let out = bin().arg("validate").env("REQCHAIN_DIR", dir.path()).output().unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = bin()
+        .arg("validate")
+        .env("REQCHAIN_DIR", dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
 fn validate_fails_with_an_actionable_message() {
     let bad = GOOD.replace("\"endpoint\": \"token\"", "\"endpoint\": \"ghost\"");
     let dir = workspace_with(&[("a.json", &bad)]);
-    let out = bin().arg("validate").env("REQCHAIN_DIR", dir.path()).output().unwrap();
+    let out = bin()
+        .arg("validate")
+        .env("REQCHAIN_DIR", dir.path())
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let text = format!(
         "{}{}",
@@ -73,15 +93,19 @@ fn unknown_endpoint_is_a_usage_error() {
 async fn print_command_masks_the_derived_chain_token() {
     let server = MockServer::start().await;
     let issued_token = "issued-chain-token-abc123";
-    Mock::given(method("POST")).and(path("/token"))
+    Mock::given(method("POST"))
+        .and(path("/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": issued_token,
             "expires_in": 3600,
         })))
-        .mount(&server).await;
-    Mock::given(method("POST")).and(path("/business"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/business"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
-        .mount(&server).await;
+        .mount(&server)
+        .await;
 
     let dir = workspace_with(&[("a.json", &CHAIN.replace("BASE_URL", &server.uri()))]);
     std::fs::write(
@@ -91,17 +115,37 @@ async fn print_command_masks_the_derived_chain_token() {
     .unwrap();
 
     let out = bin()
-        .args(["run", "chain", "business", "--env", "test", "--print-command"])
+        .args([
+            "run",
+            "chain",
+            "business",
+            "--env",
+            "test",
+            "--print-command",
+        ])
         .env("REQCHAIN_DIR", dir.path())
         .output()
         .unwrap();
 
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stdout.contains(issued_token), "derived token leaked in stdout: {stdout}");
-    assert!(!stderr.contains(issued_token), "derived token leaked in stderr: {stderr}");
-    assert!(stdout.contains("Bearer ***"), "expected masked bearer token, got: {stdout}");
+    assert!(
+        !stdout.contains(issued_token),
+        "derived token leaked in stdout: {stdout}"
+    );
+    assert!(
+        !stderr.contains(issued_token),
+        "derived token leaked in stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Bearer ***"),
+        "expected masked bearer token, got: {stdout}"
+    );
 }
 
 /// Fix round 1, finding 1: exit-code classification must key off the error
@@ -111,11 +155,13 @@ async fn print_command_masks_the_derived_chain_token() {
 #[tokio::test]
 async fn a_chain_error_whose_message_says_transport_still_exits_1() {
     let server = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/token"))
+    Mock::given(method("POST"))
+        .and(path("/token"))
         .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
             "error": "transport layer timeout",
         })))
-        .mount(&server).await;
+        .mount(&server)
+        .await;
     // /business is never reached: the auth endpoint itself fails first.
 
     let dir = workspace_with(&[("a.json", &CHAIN.replace("BASE_URL", &server.uri()))]);
@@ -148,11 +194,13 @@ async fn a_chain_error_whose_message_says_transport_still_exits_1() {
 async fn a_secret_in_a_chain_error_message_is_masked() {
     let server = MockServer::start().await;
     let secret = "hunter2-sekret-value";
-    Mock::given(method("POST")).and(path("/token"))
+    Mock::given(method("POST"))
+        .and(path("/token"))
         .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
             "error": format!("denied for {secret}"),
         })))
-        .mount(&server).await;
+        .mount(&server)
+        .await;
 
     let dir = workspace_with(&[("a.json", &CHAIN.replace("BASE_URL", &server.uri()))]);
     std::fs::write(
@@ -170,7 +218,16 @@ async fn a_secret_in_a_chain_error_message_is_masked() {
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stdout.contains(secret), "secret leaked in stdout: {stdout}");
-    assert!(!stderr.contains(secret), "secret leaked in stderr: {stderr}");
-    assert!(stderr.contains("***"), "expected the masked placeholder in stderr, got: {stderr}");
+    assert!(
+        !stdout.contains(secret),
+        "secret leaked in stdout: {stdout}"
+    );
+    assert!(
+        !stderr.contains(secret),
+        "secret leaked in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("***"),
+        "expected the masked placeholder in stderr, got: {stderr}"
+    );
 }

@@ -8,7 +8,11 @@ pub type Vars = BTreeMap<String, String>;
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
     #[error("invalid JSON at line {line}, column {column}: {message}")]
-    Json { line: usize, column: usize, message: String },
+    Json {
+        line: usize,
+        column: usize,
+        message: String,
+    },
     #[error("unsupported schemaVersion {found}, this build understands {expected}")]
     SchemaVersion { found: u32, expected: u32 },
 }
@@ -60,17 +64,39 @@ pub struct Endpoint {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum Method { Get, Post, Put, Patch, Delete, Head, Options }
+pub enum Method {
+    Get,
+    Post,
+    Put,
+    Patch,
+    Delete,
+    Head,
+    Options,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Body {
-    Json { content: serde_json::Value },
-    Form { fields: BTreeMap<String, String> },
-    Multipart { fields: BTreeMap<String, String>, #[serde(default)] files: BTreeMap<String, String> },
-    Text { content: String },
-    Xml { content: String },
-    Binary { path: String },
+    Json {
+        content: serde_json::Value,
+    },
+    Form {
+        fields: BTreeMap<String, String>,
+    },
+    Multipart {
+        fields: BTreeMap<String, String>,
+        #[serde(default)]
+        files: BTreeMap<String, String>,
+    },
+    Text {
+        content: String,
+    },
+    Xml {
+        content: String,
+    },
+    Binary {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,10 +104,20 @@ pub enum Body {
 pub enum Auth {
     Inherit,
     None,
-    Basic { username: String, password: String },
-    Bearer { token: String },
-    Header { headers: BTreeMap<String, String> },
-    Computed { name: String, expression: String },
+    Basic {
+        username: String,
+        password: String,
+    },
+    Bearer {
+        token: String,
+    },
+    Header {
+        headers: BTreeMap<String, String>,
+    },
+    Computed {
+        name: String,
+        expression: String,
+    },
     Chained {
         source: ChainSource,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,27 +131,39 @@ pub enum Auth {
 }
 
 impl Auth {
-    pub fn none() -> Self { Auth::None }
-    pub fn inherit() -> Self { Auth::Inherit }
+    pub fn none() -> Self {
+        Auth::None
+    }
+    pub fn inherit() -> Self {
+        Auth::Inherit
+    }
 }
 
-fn default_retry_on() -> Vec<u16> { vec![401, 403] }
+fn default_retry_on() -> Vec<u16> {
+    vec![401, 403]
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChainSource { pub endpoint: String }
+pub struct ChainSource {
+    pub endpoint: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "from", rename_all = "lowercase", deny_unknown_fields)]
 pub enum AuthExtract {
     Body {
-        #[serde(default, rename = "jsonPath", skip_serializing_if = "Option::is_none")] json_path: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] xpath: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] regex: Option<String>,
+        #[serde(default, rename = "jsonPath", skip_serializing_if = "Option::is_none")]
+        json_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        xpath: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        regex: Option<String>,
     },
     Header {
         name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] regex: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        regex: Option<String>,
     },
     Status,
 }
@@ -124,26 +172,46 @@ pub enum AuthExtract {
 #[serde(tag = "from", rename_all = "lowercase", deny_unknown_fields)]
 pub enum AuthTtl {
     Body {
-        #[serde(rename = "jsonPath")] json_path: String,
-        #[serde(default = "seconds_unit")] unit: String,
+        #[serde(rename = "jsonPath")]
+        json_path: String,
+        #[serde(default = "seconds_unit")]
+        unit: String,
     },
-    Fixed { seconds: u64 },
+    Fixed {
+        seconds: u64,
+    },
     Absolute {
-        #[serde(rename = "jsonPath")] json_path: String,
+        #[serde(rename = "jsonPath")]
+        json_path: String,
     },
 }
 
-fn seconds_unit() -> String { "seconds".to_string() }
+fn seconds_unit() -> String {
+    "seconds".to_string()
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "into", rename_all = "lowercase", deny_unknown_fields)]
 pub enum AuthInject {
-    Header { name: String, template: String },
-    Query { name: String, #[serde(default = "value_template")] template: String },
-    Body { pointer: String, #[serde(default = "value_template")] template: String },
+    Header {
+        name: String,
+        template: String,
+    },
+    Query {
+        name: String,
+        #[serde(default = "value_template")]
+        template: String,
+    },
+    Body {
+        pointer: String,
+        #[serde(default = "value_template")]
+        template: String,
+    },
 }
 
-fn value_template() -> String { "{{value}}".to_string() }
+fn value_template() -> String {
+    "{{value}}".to_string()
+}
 
 impl Api {
     pub fn from_json(text: &str) -> Result<Api, LoadError> {
@@ -153,7 +221,10 @@ impl Api {
             message: e.to_string(),
         })?;
         if api.schema_version != SCHEMA_VERSION {
-            return Err(LoadError::SchemaVersion { found: api.schema_version, expected: SCHEMA_VERSION });
+            return Err(LoadError::SchemaVersion {
+                found: api.schema_version,
+                expected: SCHEMA_VERSION,
+            });
         }
         Ok(api)
     }

@@ -1,10 +1,10 @@
+use reqchain_core::auth;
 use reqchain_core::exec::Runner;
 use reqchain_core::model::Api;
 use reqchain_core::request::{self, EffectiveBody};
 use reqchain_core::secrets::Secrets;
 use reqchain_core::shell;
 use reqchain_core::vars::Scope;
-use reqchain_core::auth;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -61,13 +61,19 @@ async fn sends_interpolated_json_body_and_reports_metrics() {
     let res = Runner::new().send(&req).await.unwrap();
     assert_eq!(res.status, 200);
     assert!(res.size_bytes > 0);
-    assert!(res.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")));
+    assert!(res
+        .headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type")));
 }
 
 #[tokio::test]
 async fn computed_header_is_evaluated() {
     let today = chrono::Local::now().format("%Y%m%d");
-    let expected = format!("{:x}", md5_simple::compute(format!("{today}12345678").as_bytes()));
+    let expected = format!(
+        "{:x}",
+        md5_simple::compute(format!("{today}12345678").as_bytes())
+    );
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -91,7 +97,8 @@ async fn computed_header_is_evaluated() {
 
 #[test]
 fn shell_export_masks_secret_values() {
-    let text = include_str!("../../../tests/fixtures/exec.json").replace("BASE_URL", "https://example.test");
+    let text = include_str!("../../../tests/fixtures/exec.json")
+        .replace("BASE_URL", "https://example.test");
     let api = Api::from_json(&text).unwrap();
     let ep = api.endpoint("odilo").unwrap();
     let secrets = Secrets::from_map([("API_TOKEN".into(), "sup3rsecret".into())]);
@@ -105,7 +112,10 @@ fn shell_export_masks_secret_values() {
     assert!(command.contains("***"));
 
     let today = chrono::Local::now().format("%Y%m%d");
-    let expected = format!("{:x}", md5_simple::compute(format!("{today}12345678").as_bytes()));
+    let expected = format!(
+        "{:x}",
+        md5_simple::compute(format!("{today}12345678").as_bytes())
+    );
     assert!(command.contains(&format!("hash: {expected}")));
 }
 
@@ -126,9 +136,13 @@ fn json_body_escapes_quotes_and_backslashes_in_interpolated_values() {
     let req = request::build(&api, ep, &scope).unwrap();
 
     let content = effective_json_body(&req);
-    let parsed: serde_json::Value = serde_json::from_str(content)
-        .unwrap_or_else(|e| panic!("interpolated body must still be valid JSON: {e}\nbody: {content}"));
-    assert_eq!(parsed["field"], serde_json::Value::String(value.to_string()));
+    let parsed: serde_json::Value = serde_json::from_str(content).unwrap_or_else(|e| {
+        panic!("interpolated body must still be valid JSON: {e}\nbody: {content}")
+    });
+    assert_eq!(
+        parsed["field"],
+        serde_json::Value::String(value.to_string())
+    );
 }
 
 #[test]
@@ -142,8 +156,14 @@ fn json_body_does_not_let_an_interpolated_value_inject_a_sibling_key() {
 
     let content = effective_json_body(&req);
     let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
-    assert_eq!(parsed["field"], serde_json::Value::String(value.to_string()));
-    assert!(parsed.get("injected").is_none(), "value must not inject a sibling key: {content}");
+    assert_eq!(
+        parsed["field"],
+        serde_json::Value::String(value.to_string())
+    );
+    assert!(
+        parsed.get("injected").is_none(),
+        "value must not inject a sibling key: {content}"
+    );
     assert_eq!(parsed.as_object().unwrap().len(), 1);
 }
 
@@ -160,7 +180,10 @@ fn json_body_preserves_number_boolean_and_null_literals() {
 
     let content = effective_json_body(&req);
     let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
-    assert_eq!(parsed["s"], serde_json::Value::String("12345678".to_string()));
+    assert_eq!(
+        parsed["s"],
+        serde_json::Value::String("12345678".to_string())
+    );
     assert_eq!(parsed["n"], serde_json::json!(5));
     assert_eq!(parsed["b"], serde_json::json!(true));
     assert_eq!(parsed["nil"], serde_json::Value::Null);
@@ -200,7 +223,10 @@ fn masked_redacts_secret_values_in_multipart_fields_but_not_file_paths() {
 
     match req.body.as_ref().unwrap() {
         EffectiveBody::Multipart { fields, .. } => {
-            assert_eq!(fields, &vec![("apiKey".to_string(), "sup3rsecret".to_string())]);
+            assert_eq!(
+                fields,
+                &vec![("apiKey".to_string(), "sup3rsecret".to_string())]
+            );
         }
         other => panic!("expected a Multipart body, got {other:?}"),
     }
@@ -210,7 +236,13 @@ fn masked_redacts_secret_values_in_multipart_fields_but_not_file_paths() {
         EffectiveBody::Multipart { fields, files } => {
             assert_eq!(fields, &vec![("apiKey".to_string(), "***".to_string())]);
             // File paths must never be treated as secret-bearing content.
-            assert_eq!(files, &vec![("attachment".to_string(), "/tmp/sup3rsecret-report.pdf".to_string())]);
+            assert_eq!(
+                files,
+                &vec![(
+                    "attachment".to_string(),
+                    "/tmp/sup3rsecret-report.pdf".to_string()
+                )]
+            );
         }
         other => panic!("expected a Multipart body, got {other:?}"),
     }
