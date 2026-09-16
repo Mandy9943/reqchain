@@ -12,6 +12,24 @@ pub enum BuildError {
 /// anything a reader could not already see.
 pub const MIN_MASKABLE_LEN: usize = 6;
 
+/// The sentinel a redacted value is replaced with everywhere in this crate.
+pub const MASK_SENTINEL: &str = "***";
+
+/// Replaces every occurrence of each `value` at least [`MIN_MASKABLE_LEN`] long
+/// with [`MASK_SENTINEL`]. Shared by [`EffectiveRequest::masked_with`] and
+/// `history::entry_from`, so there is exactly one place that decides what
+/// "redacted" means.
+pub(crate) fn redact(text: &str, values: &[String]) -> String {
+    let mut out = text.to_string();
+    for v in values
+        .iter()
+        .filter(|s| s.chars().count() >= MIN_MASKABLE_LEN)
+    {
+        out = out.replace(v.as_str(), MASK_SENTINEL);
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectiveBody {
     Text {
@@ -77,13 +95,7 @@ impl EffectiveRequest {
                 }
             })
             .collect();
-        let mask = |s: &String| {
-            let mut out = s.clone();
-            for form in &forms {
-                out = out.replace(form.as_str(), "***")
-            }
-            out
-        };
+        let mask = |s: &String| redact(s, &forms);
         let is_auth_header = |name: &str| auth_headers.iter().any(|h| h.eq_ignore_ascii_case(name));
         EffectiveRequest {
             method: self.method,

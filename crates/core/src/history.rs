@@ -2,7 +2,7 @@
 //! pollutes a git-versioned file.
 use crate::exec::RunResult;
 use crate::paths::Paths;
-use crate::request::{EffectiveBody, EffectiveRequest};
+use crate::request::{self, EffectiveBody, EffectiveRequest};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -24,10 +24,15 @@ pub struct HistoryEntry {
 }
 
 /// Builds an entry from a finished run. `masked` must be the already-masked
-/// effective request: history is written to disk and must never hold a secret.
+/// effective request; `mask` is the list of literal values — secrets and
+/// chain-derived tokens — that must never reach disk. Even a masked request can
+/// carry a live credential in its own RESPONSE body (a chained-auth source
+/// endpoint's response holds the token), so both bodies are redacted here with
+/// the same substring mask `request::masked_with` uses, not just copied through.
 pub fn entry_from(
     result: &RunResult,
     masked: &EffectiveRequest,
+    mask: &[String],
     store_bodies: bool,
 ) -> HistoryEntry {
     HistoryEntry {
@@ -38,12 +43,16 @@ pub fn entry_from(
         method: masked.method.as_str().to_string(),
         url: masked.url.clone(),
         request_body: if store_bodies {
-            masked.body.as_ref().map(body_text)
+            masked
+                .body
+                .as_ref()
+                .map(body_text)
+                .map(|b| request::redact(&b, mask))
         } else {
             None
         },
         response_body: if store_bodies {
-            Some(result.body_text())
+            Some(request::redact(&result.body_text(), mask))
         } else {
             None
         },
@@ -88,18 +97,33 @@ pub fn append(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut lines: Vec<String> = std::fs::read_to_string(&path)
-        .unwrap_or_default()
+    // Only treat "not found" as empty (file doesn't exist yet). Any other error
+    // (permission denied, not a regular file, etc.) must be reported, not read
+    // as an empty history — the next step would then truncate real entries away.
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let mut lines: Vec<String> = existing
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(str::to_string)
         .collect();
     lines.push(serde_json::to_string(entry)?);
     let start = lines.len().saturating_sub(DEFAULT_LIMIT);
-    let mut out = std::fs::File::create(&path)?;
-    for line in &lines[start..] {
-        writeln!(out, "{line}")?;
+
+    // Write to a temp file in the same directory and rename it over the target,
+    // so a crash or a concurrent writer never observes a half-written or
+    // truncated history file.
+    let tmp_path = path.with_extension(format!("jsonl.tmp.{}", std::process::id()));
+    {
+        let mut out = std::fs::File::create(&tmp_path)?;
+        for line in &lines[start..] {
+            writeln!(out, "{line}")?;
+        }
     }
+    std::fs::rename(&tmp_path, &path)?;
     Ok(())
 }
 
