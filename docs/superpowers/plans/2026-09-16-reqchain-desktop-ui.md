@@ -736,13 +736,14 @@ fn main() {
 }
 ```
 
-Placeholder icons (phase 3 replaces them with the real one):
+The icons already exist — `apps/desktop/src-tauri/icons/` holds `32x32.png`,
+`128x128.png`, `128x128@2x.png` and `icon.png`, rendered from `assets/icon.svg`.
+Do not generate placeholders and do not regenerate them. To re-render after an
+edit to the SVG:
 
 ```bash
-cd apps/desktop/src-tauri && pnpm dlx @tauri-apps/cli icon --help >/dev/null 2>&1 || true
+pnpm dlx sharp-cli -i assets/icon.svg -o <tmpdir> -f png resize <size> <size>
 ```
-
-If no icon source exists yet, generate three solid placeholder PNGs with any available tool (e.g. `convert -size 128x128 xc:#1f6feb icons/128x128.png`) and copy them to the three names listed in `tauri.conf.json`. Do not block the task on artwork.
 
 - [ ] **Step 3: Wire the cargo workspace**
 
