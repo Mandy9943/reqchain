@@ -52,9 +52,21 @@ export function select(
   runSeq++;
 }
 
+/**
+ * True while the current selection still resolves to a real endpoint in
+ * the workspace. False once a hot reload has marked it removed (see
+ * `ui.removedSelected`) — anything that would call the backend with these
+ * ids (`run_endpoint`, `curl_command`, `preview_endpoint`, `save_api`) must
+ * gate on this, not on `ui.selected` alone, since a removed endpoint's ids
+ * no longer resolve on the Rust side either.
+ */
+export function isSelectionLive(): boolean {
+  return selectedEndpoint() !== undefined;
+}
+
 /** True while a send can actually be triggered for the current selection. */
 export function canSendSelected(): boolean {
-  return ui.selected !== null && !ui.running;
+  return isSelectionLive() && !ui.running;
 }
 
 /**
@@ -219,6 +231,13 @@ export function selectedEndpointOrRemoved(): EndpointDto | undefined {
 
 // The backend has already reloaded its own state by the time this fires —
 // just re-invoke load_workspace.
+//
+// Deliberately module-scope with no unlisten: this is a singleton store for
+// a single-window app, so it lives exactly as long as the app does — there
+// is no component lifecycle to tear it down against, and no scenario where
+// it should stop listening while the window is open. Do not "fix" this into
+// a component-owned listener with an unlisten; that would just make it stop
+// working the moment whatever component registered it unmounts.
 listen(WORKSPACE_CHANGED_EVENT, () => {
   void reload();
 });

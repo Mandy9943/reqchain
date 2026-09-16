@@ -1,6 +1,10 @@
 <script lang="ts">
   import { history as fetchHistory, type HistoryEntry } from "./ipc";
-  import { selectedApi, selectedEndpoint, ui } from "./state.svelte";
+  import {
+    selectedApiOrRemoved,
+    selectedEndpointOrRemoved,
+    ui,
+  } from "./state.svelte";
 
   let entries = $state<HistoryEntry[]>([]);
   let loadError = $state<string | null>(null);
@@ -11,8 +15,14 @@
   // sequence-counter pattern used across the other panels.
   let seq = 0;
 
-  const api = $derived(selectedApi());
-  const endpoint = $derived(selectedEndpoint());
+  // Use the removed-aware selectors, not the live-only ones: history is a
+  // plain id lookup against a persisted log, not something that needs the
+  // endpoint to still be listed in the parsed workspace, so a hot-reload
+  // removed selection should still show its history strip — consistent
+  // with RequestPanel/ResponsePanel still showing the rest of that
+  // endpoint's last-known state instead of going blank.
+  const api = $derived(selectedApiOrRemoved());
+  const endpoint = $derived(selectedEndpointOrRemoved());
 
   // Refetch whenever the selection changes, and after every run (a new run
   // produces a new `ui.response` object, so watching it re-triggers this

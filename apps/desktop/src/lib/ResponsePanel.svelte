@@ -1,7 +1,12 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { curlCommand, type AuthStepDto } from "./ipc";
-  import { canSendSelected, sendSelected, ui } from "./state.svelte";
+  import {
+    canSendSelected,
+    isSelectionLive,
+    sendSelected,
+    ui,
+  } from "./state.svelte";
 
   type Tab = "body" | "headers" | "effective" | "auth";
 
@@ -124,6 +129,7 @@
   }
 
   async function handleCopyCurl(): Promise<void> {
+    if (!isSelectionLive()) return;
     const sel = ui.selected;
     if (!sel) return;
     const apiId = sel.apiId;
@@ -177,7 +183,7 @@
     <button
       type="button"
       class="copy-button"
-      disabled={!ui.selected}
+      disabled={!isSelectionLive()}
       onclick={handleCopyCurl}
     >
       {copyLabel()}

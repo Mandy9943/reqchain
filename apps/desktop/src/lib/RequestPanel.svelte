@@ -94,6 +94,15 @@
   // `lintSeq` against a stale response (from a previous keystroke, or a
   // since-abandoned API/selection) landing after a newer one already did.
   $effect(() => {
+    // Re-keyed on `ui.selected` explicitly (not just `bufferText`): fix
+    // chosen for the "diagnostics vanish on endpoint switch" review finding
+    // was to re-key rather than drop the unconditional clear in the
+    // selection-change effect above. `bufferText` alone doesn't change when
+    // switching between two endpoints of the *same* API — diagnostics lint
+    // the whole file, not a single endpoint, so its derived value is
+    // identical and this effect would never re-fire, leaving the strip
+    // cleared until the next keystroke.
+    void ui.selected;
     const text = bufferText;
     if (!liveApi || text === undefined) {
       return;
@@ -190,9 +199,23 @@
       }
       const hasError = result.some((d) => d.severity === "error");
       if (!hasError) {
-        ui.buffers[apiId] = text;
         cleanSnapshot[apiId] = text;
+        // A save just resolved successfully, so there's no "changed on
+        // disk while dirty" conflict from it — even if the buffer has
+        // since moved on (below), that's a fresh local edit, not a
+        // hot-reload conflict.
         ui.diskChanged[apiId] = false;
+        // Only adopt the saved text into the buffer if nothing was typed
+        // into it while the save was in flight — same identity check as
+        // the cleanSnapshot-merge effect above, so a keystroke that landed
+        // during the await is never reverted (the lost-work class commit
+        // e57b89b closed). If the buffer moved on, leave it alone: that
+        // effect will adopt the canonical (re-serialized) text once the
+        // post-save reload arrives, but only once the buffer again equals
+        // exactly what was saved.
+        if (ui.buffers[apiId] === text) {
+          ui.buffers[apiId] = text;
+        }
         if (ui.selected?.apiId === apiId) {
           previewGeneration++;
         }
