@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import RequestPanel from "./lib/RequestPanel.svelte";
+  import ResponsePanel from "./lib/ResponsePanel.svelte";
   import { reload, ui } from "./lib/state.svelte";
 
   onMount(() => {
@@ -17,8 +18,7 @@
   </section>
 
   <section class="panel response-panel">
-    <!-- Task 9 fills this in: response viewer. -->
-    <p class="placeholder">Response panel (task 9)</p>
+    <ResponsePanel />
   </section>
 </main>
 
@@ -42,11 +42,6 @@
 
   .request-panel {
     border-right: 1px solid var(--color-border);
-  }
-
-  .placeholder {
-    color: var(--color-text-muted);
-    font-style: italic;
   }
 
   .global-error {
