@@ -14,6 +14,7 @@
     "@codemirror/state": "^6",
     "@codemirror/view": "^6",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.3",
     "codemirror": "^6"
   },
   "devDependencies": {

@@ -1,5 +1,12 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  // NOT `navigator.clipboard`: Tauri's `WebviewAttributes.clipboard` defaults
+  // to false and wry only enables WebKitGTK clipboard access when it is set,
+  // so `navigator.clipboard.writeText` rejects in the packaged app on the only
+  // platform this ships to (it works in a plain browser, which is why a
+  // browser-pane check cannot catch this). The plugin writes through the
+  // system clipboard directly.
+  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { curlCommand, type AuthStepDto } from "./ipc";
   import {
     canSendSelected,
@@ -109,7 +116,11 @@
       case "copied":
         return "Copied!";
       default:
-        return "Copy as curl";
+        // "(masked)" is not decoration: secrets and chain tokens come out as
+        // `***` (spec §5.3) and §5.3's "unless the user explicitly reveals
+        // them" is not built, so the exported command cannot be run as-is.
+        // Deferred to phase 3 — see SPEC.md.
+        return "Copy as curl (masked)";
     }
   }
 
@@ -140,7 +151,7 @@
     copyError = null;
     try {
       const text = await curlCommand(apiId, endpointId, env);
-      await navigator.clipboard.writeText(text);
+      await writeText(text);
       if (ui.selected?.apiId === apiId && ui.selected?.endpointId === endpointId) {
         copyState = "copied";
         if (copyResetHandle) clearTimeout(copyResetHandle);
