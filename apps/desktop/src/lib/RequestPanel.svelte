@@ -43,6 +43,15 @@
   const api = $derived(selectedApiOrRemoved());
   const endpoint = $derived(selectedEndpointOrRemoved());
   const isRemoved = $derived(ui.removedSelected !== null);
+  // The API's own header row is selected (`endpointId: null`) — an API
+  // with zero endpoints is always in this state right after creation, since
+  // there is nothing else to select. Task 6 fills this branch with the API
+  // settings form; for now it's a clearly-marked placeholder so the state
+  // is visibly reachable rather than silently falling through to "Select an
+  // endpoint" (which would make a brand-new, endpoint-less API look broken).
+  const isApiOnlySelected = $derived(
+    api !== undefined && ui.selected !== null && ui.selected.endpointId === null,
+  );
   const bufferText = $derived(api ? ui.buffers[api.id] : undefined);
   const dirty = $derived(
     api !== undefined && bufferText !== undefined && bufferText !== api.text,
@@ -148,7 +157,10 @@
       return;
     }
     const apiId = sel.apiId;
-    const endpointId = sel.endpointId;
+    // `liveEndpoint` (checked above) guarantees this is a resolved endpoint
+    // selection, not an API-only one — read the id off it rather than
+    // `sel.endpointId`, which is `string | null`.
+    const endpointId = liveEndpoint.id;
     const env = ui.env[apiId] ?? null;
     void previewGeneration;
     const handle = setTimeout(() => {
@@ -252,7 +264,15 @@
 </script>
 
 <div class="request-panel-inner">
-  {#if !api || !endpoint}
+  {#if !api}
+    <p class="placeholder">Select an endpoint</p>
+  {:else if isApiOnlySelected}
+    <div class="api-settings-placeholder" data-testid="api-settings-placeholder">
+      <p class="placeholder">
+        <strong>{api.name}</strong> — API settings (coming soon)
+      </p>
+    </div>
+  {:else if !endpoint}
     <p class="placeholder">Select an endpoint</p>
   {:else}
     {#if isRemoved}
@@ -331,6 +351,12 @@
   .placeholder {
     color: var(--color-text-muted);
     font-style: italic;
+  }
+
+  .api-settings-placeholder {
+    border: 1px dashed var(--color-border);
+    border-radius: 4px;
+    padding: 1rem;
   }
 
   .summary {

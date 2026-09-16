@@ -18,6 +18,10 @@ pub struct ApiDto {
     pub environments: Vec<String>,
     pub endpoints: Vec<EndpointDto>,
     pub text: String,
+    /// The file this API was loaded from (`Workspace::path_of`), as a
+    /// display string. Needed so the sidebar's delete confirmation can name
+    /// the actual file being removed, not just the API's `name`/`id`.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -325,7 +329,7 @@ impl ApiDto {
     /// Builds the DTO for an already-loaded `Api`, pairing it with the raw text
     /// the file held on disk so the editor opens the real bytes, not a
     /// re-serialization.
-    pub fn from_api(api: &reqchain_core::model::Api, text: String) -> ApiDto {
+    pub fn from_api(api: &reqchain_core::model::Api, text: String, path: String) -> ApiDto {
         ApiDto {
             id: api.id.clone(),
             name: api.name.clone(),
@@ -337,6 +341,7 @@ impl ApiDto {
                 .map(|ep| EndpointDto::from_endpoint(api, ep))
                 .collect(),
             text,
+            path,
         }
     }
 }

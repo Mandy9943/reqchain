@@ -17,6 +17,8 @@ export interface ApiDto {
   environments: string[];
   endpoints: EndpointDto[];
   text: string;
+  /** The file this API was loaded from, as a display string (Workspace::path_of). */
+  path: string;
 }
 
 export type AuthKind =
@@ -104,6 +106,11 @@ export async function saveApi(
   text: string,
 ): Promise<DiagnosticDto[]> {
   return invoke("save_api", { apiId, text });
+}
+
+/** Deletes the file `apiId` was loaded from. Rejects if `apiId` is unknown. */
+export async function deleteApi(apiId: string): Promise<void> {
+  return invoke("delete_api", { apiId });
 }
 
 export async function runEndpoint(

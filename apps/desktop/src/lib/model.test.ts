@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyApi, emptyEndpoint, parseApi, serializeApi } from "./model";
+import { emptyApi, emptyEndpoint, parseApi, serializeApi, slugify } from "./model";
 
 // Note: formatted to match the real pretty-printer (`JSON.stringify(api,
 // null, 2)`, same shape `serde_json::to_string_pretty` produces on the
@@ -111,5 +111,28 @@ describe("Rust-always-present fields", () => {
     expect(ep.query).toEqual({});
     expect(ep.variables).toEqual({});
     expect(ep.auth).toEqual({ type: "inherit" });
+  });
+});
+
+describe("slugify", () => {
+  it("lowercases and hyphenates a plain name", () => {
+    expect(slugify("Payments Gateway")).toBe("payments-gateway");
+  });
+
+  it("collapses runs of non-alphanumeric characters into one hyphen", () => {
+    expect(slugify("  Foo___Bar!! Baz  ")).toBe("foo-bar-baz");
+  });
+
+  it("trims leading and trailing hyphens", () => {
+    expect(slugify("-leading and trailing-")).toBe("leading-and-trailing");
+  });
+
+  it("returns an empty string for a name with no alphanumeric characters", () => {
+    expect(slugify("***")).toBe("");
+    expect(slugify("   ")).toBe("");
+  });
+
+  it("keeps digits", () => {
+    expect(slugify("API v2")).toBe("api-v2");
   });
 });

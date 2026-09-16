@@ -19,6 +19,7 @@ fn main() {
             commands::load_workspace,
             commands::lint,
             commands::save_api,
+            commands::delete_api,
             commands::run_endpoint,
             commands::preview_endpoint,
             commands::curl_command,

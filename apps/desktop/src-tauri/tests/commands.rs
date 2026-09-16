@@ -108,6 +108,26 @@ async fn save_api_writes_atomically_via_temp_file_and_rename() {
     assert!(leftover.is_empty(), "left temp files: {leftover:?}");
 }
 
+#[tokio::test]
+async fn delete_api_removes_the_file_it_was_loaded_from() {
+    let (_d, state) = state_with("gateway.json", GOOD); // id is `demo`, name is not
+    let path = state.paths.apis_dir().join("gateway.json");
+    assert!(path.exists());
+    commands::delete_api_inner(&state, "demo").await.unwrap();
+    assert!(!path.exists(), "deleted the wrong file, or none");
+    assert!(commands::load_workspace_inner(&state).await.apis.is_empty());
+}
+
+#[tokio::test]
+async fn delete_api_refuses_an_unknown_id_instead_of_deleting_nothing_quietly() {
+    let (_d, state) = state_with("demo.json", GOOD);
+    let err = commands::delete_api_inner(&state, "nope")
+        .await
+        .unwrap_err();
+    assert!(err.contains("nope"));
+    assert!(state.paths.apis_dir().join("demo.json").exists());
+}
+
 #[test]
 fn lint_reports_the_chained_default_warning() {
     let text = r#"{"schemaVersion":1,"id":"d","name":"D","baseUrl":"https://x","endpoints":[

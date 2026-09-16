@@ -201,3 +201,19 @@ export function emptyEndpoint(id: string, name: string): Endpoint {
     auth: { type: "inherit" }, // Auth::inherit(), Endpoint's #[serde(default)]
   };
 }
+
+/**
+ * Derives an id from a user-typed name: lowercase, non-alphanumeric runs
+ * collapsed to a single `-`, leading/trailing `-` trimmed. Used by the
+ * sidebar's "New API"/"New endpoint" rows so the user never has to type an
+ * id by hand. Can return `""` for a name with no alphanumeric characters at
+ * all (e.g. "***") — callers must treat that as "no valid id" and refuse to
+ * create anything, never fall back to an empty id.
+ */
+export function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}

@@ -27,7 +27,7 @@ fn dto_for_api(workspace: &Workspace, api: &Api, errors: &mut Vec<FileErrorDto>)
         return None;
     };
     match std::fs::read_to_string(path) {
-        Ok(text) => Some(ApiDto::from_api(api, text)),
+        Ok(text) => Some(ApiDto::from_api(api, text, path.display().to_string())),
         Err(e) => {
             errors.push(FileErrorDto {
                 path: path.display().to_string(),
@@ -107,6 +107,26 @@ pub async fn save_api_inner(
         .map_err(|e| format!("{}: {e}", path.display()))?;
     state.reload().await;
     Ok(diags)
+}
+
+/// Deletes the file `api_id` was loaded from and reloads the workspace.
+///
+/// Resolves the path through `Workspace::path_of` — never
+/// `apis_dir().join(format!("{id}.json"))` — because a file's basename need
+/// not match the `id` inside it (commit bdda08f). Using the naming
+/// convention here would silently remove (or fail to remove) the wrong
+/// file whenever they differ.
+pub async fn delete_api_inner(state: &AppState, api_id: &str) -> Result<(), String> {
+    let path = state
+        .workspace
+        .lock()
+        .unwrap()
+        .path_of(api_id)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| format!("API `{api_id}` not found"))?;
+    std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    state.reload().await;
+    Ok(())
 }
 
 fn find_api(state: &AppState, api_id: &str) -> Result<Api, String> {
@@ -293,6 +313,11 @@ pub async fn save_api(
     text: String,
 ) -> Result<Vec<DiagnosticDto>, String> {
     save_api_inner(&state, &api_id, &text).await
+}
+
+#[tauri::command]
+pub async fn delete_api(state: tauri::State<'_, AppState>, api_id: String) -> Result<(), String> {
+    delete_api_inner(&state, &api_id).await
 }
 
 #[cfg(test)]
