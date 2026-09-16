@@ -3,6 +3,10 @@ use base64::Engine;
 
 pub const SUPPORTED: &[&str] = &["md5", "sha1", "sha256", "base64", "now"];
 
+/// Maximum recursion depth for nested `term`s (function-call arguments), so a
+/// pathologically nested expression fails with an error instead of blowing the stack.
+pub const MAX_DEPTH: usize = 32;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExprError {
     #[error("unknown function `{name}` — supported: {supported}")]
@@ -11,12 +15,14 @@ pub enum ExprError {
     Syntax { message: String },
     #[error("`{name}` takes {expected} argument(s), found {found}")]
     Arity { name: String, expected: usize, found: usize },
+    #[error("expression nested deeper than {max} levels")]
+    TooDeep { max: usize },
     #[error(transparent)]
     Var(#[from] VarError),
 }
 
 pub fn eval(input: &str, scope: &Scope) -> Result<String, ExprError> {
-    let mut p = Parser { s: input.as_bytes(), i: 0, scope };
+    let mut p = Parser { s: input.as_bytes(), i: 0, scope, depth: 0 };
     let value = p.expr()?;
     p.skip_ws();
     if p.i != p.s.len() {
@@ -25,7 +31,7 @@ pub fn eval(input: &str, scope: &Scope) -> Result<String, ExprError> {
     Ok(value)
 }
 
-struct Parser<'a, 'b> { s: &'a [u8], i: usize, scope: &'a Scope<'b> }
+struct Parser<'a, 'b> { s: &'a [u8], i: usize, scope: &'a Scope<'b>, depth: usize }
 
 impl<'a, 'b> Parser<'a, 'b> {
     fn skip_ws(&mut self) {
@@ -45,7 +51,20 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
+    /// Every recursive path (nested function calls, parenthesised arguments) goes
+    /// through `term`, so bounding recursion depth here bounds the whole parser.
     fn term(&mut self) -> Result<String, ExprError> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            self.depth -= 1;
+            return Err(ExprError::TooDeep { max: MAX_DEPTH });
+        }
+        let result = self.term_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn term_inner(&mut self) -> Result<String, ExprError> {
         self.skip_ws();
         if self.i >= self.s.len() {
             return Err(ExprError::Syntax { message: "unexpected end of expression".into() });
