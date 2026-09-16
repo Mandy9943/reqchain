@@ -205,17 +205,13 @@
         // since moved on (below), that's a fresh local edit, not a
         // hot-reload conflict.
         ui.diskChanged[apiId] = false;
-        // Only adopt the saved text into the buffer if nothing was typed
-        // into it while the save was in flight — same identity check as
-        // the cleanSnapshot-merge effect above, so a keystroke that landed
-        // during the await is never reverted (the lost-work class commit
-        // e57b89b closed). If the buffer moved on, leave it alone: that
-        // effect will adopt the canonical (re-serialized) text once the
-        // post-save reload arrives, but only once the buffer again equals
-        // exactly what was saved.
-        if (ui.buffers[apiId] === text) {
-          ui.buffers[apiId] = text;
-        }
+        // The buffer is deliberately NOT touched here. A keystroke that
+        // landed while the save was in flight must never be reverted (the
+        // lost-work class commit e57b89b closed), and if the buffer still
+        // holds exactly `text` there is nothing to assign — the
+        // cleanSnapshot-merge effect above adopts the canonical
+        // (re-serialized) text once the post-save reload arrives, and only
+        // while the buffer still equals exactly what was saved.
         if (ui.selected?.apiId === apiId) {
           previewGeneration++;
         }
