@@ -324,6 +324,27 @@ impl Executor {
         Ok(req)
     }
 
+    /// The token-cache key this executor would use for `endpoint_id`'s chained
+    /// auth, or `None` when that endpoint has no chained auth (nothing is
+    /// cached for it).
+    ///
+    /// Exists so a cache entry can be addressed from OUTSIDE the executor that
+    /// derived it. Today the desktop app's cache is in memory and always filled
+    /// by the same executor, which is the only reason masking survives a cache
+    /// hit: `token()` re-`remember`s the cached value, so it rejoins the mask
+    /// list. Persisting the cache (or sharing it between executors) would remove
+    /// that coincidence, so the behaviour is pinned by a test that fills the
+    /// cache with a token this executor never derived.
+    pub fn cache_key(&self, api: &Api, endpoint_id: &str, env: Option<&str>) -> Option<String> {
+        let endpoint = api.endpoint(endpoint_id)?;
+        let resolved = auth::resolve(api, endpoint).clone();
+        let Auth::Chained { source, .. } = &resolved else {
+            return None;
+        };
+        let fingerprint = self.scope_fingerprint(api, &source.endpoint, env);
+        Some(TokenCache::key(&api.id, &resolved, &fingerprint))
+    }
+
     /// The part of a cache key that is not the auth *definition*: the active
     /// environment plus a digest of the credential values that definition actually
     /// resolves to along the chain it walks. Hashing the resolved credentials — and

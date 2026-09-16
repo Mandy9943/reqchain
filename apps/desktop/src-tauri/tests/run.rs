@@ -674,3 +674,87 @@ async fn a_rotated_secret_is_sent_not_the_stale_one_and_the_stale_one_never_leak
         "rotated secret leaked unmasked: {serialized}"
     );
 }
+
+/// Masking on the CACHE-HIT path had nothing pinning it. It is safe today only
+/// because the GUI's cache lives in memory and is always filled by the very
+/// `Executor` that derived the token, so the token is in `derived_values()` and
+/// therefore in the mask. One persistence change — or one shared executor —
+/// turns that coincidence into a live leak: a cache hit injects a real token
+/// into the request, the auth trace and history with nothing masking it.
+///
+/// So: fill the cache with a token this executor never derived, run, and assert
+/// the serialized DTO is clean.
+#[tokio::test]
+async fn a_cache_hit_masks_a_token_this_executor_never_derived() {
+    const FOREIGN: &str = "foreign-token-not-derived-here";
+    let mock = MockServer::start().await;
+    // A cache hit must not call the auth endpoint at all.
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({ "access_token": "should-never-be-used", "expires_in": 3600 }),
+        ))
+        .expect(0)
+        .mount(&mock)
+        .await;
+    // The business endpoint echoes the token back, exercising the response-side
+    // mask as well as the request-side one.
+    Mock::given(method("GET"))
+        .and(path("/biz"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "echoed": format!("Bearer {FOREIGN}") })),
+        )
+        .mount(&mock)
+        .await;
+
+    let (dir, state) = state_for(&mock.uri(), "");
+    // Populate the workspace so the executor can compute the key for `biz`.
+    let _ = commands::load_workspace_inner(&state).await;
+    {
+        let api = state
+            .workspace
+            .lock()
+            .unwrap()
+            .api("demo")
+            .cloned()
+            .expect("api loaded");
+        let mut executor = state.executor.lock().await;
+        let key = executor
+            .cache_key(&api, "biz", None)
+            .expect("biz has a chained auth");
+        let far_future = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+        executor
+            .cache_mut()
+            .put(&key, FOREIGN.to_string(), Some(far_future));
+    }
+
+    let dto = commands::run_endpoint_inner(&state, "demo", "biz", None)
+        .await
+        .expect("the run succeeds off the cached token");
+
+    assert!(
+        dto.auth_trace.iter().any(|s| s.from_cache),
+        "the test must actually exercise a cache hit: {:?}",
+        dto.auth_trace
+    );
+
+    let serialized = serde_json::to_string(&dto).unwrap();
+    assert!(
+        !serialized.contains(FOREIGN),
+        "a cached token the executor did not derive leaked into the DTO: {serialized}"
+    );
+    assert!(serialized.contains("***"), "{serialized}");
+
+    // And it must not reach the history file on disk either.
+    let history =
+        std::fs::read_to_string(dir.path().join("history").join("demo").join("biz.jsonl")).unwrap();
+    assert!(
+        !history.contains(FOREIGN),
+        "the cached token reached the history file: {history}"
+    );
+}
