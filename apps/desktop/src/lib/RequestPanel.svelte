@@ -1,6 +1,7 @@
 <script lang="ts">
   import { lint, previewEndpoint, saveApi, type DiagnosticDto } from "./ipc";
   import {
+    canWriteApiDoc,
     discardLocalChanges,
     selectedApi,
     selectedApiOrRemoved,
@@ -195,10 +196,7 @@
     const text = ui.buffers[apiId];
     const current = ui.workspace.apis.find((a) => a.id === apiId);
     if (!current || text === undefined || text === current.text) return false;
-    // A save for this API must not already be in flight, and Sidebar must
-    // not be mid-delete of this same file — otherwise the save could write
-    // the file right back after delete_api removed it.
-    return !ui.savingIds[apiId] && !ui.deletingIds[apiId];
+    return canWriteApiDoc(apiId);
   }
 
   async function handleSave(): Promise<void> {

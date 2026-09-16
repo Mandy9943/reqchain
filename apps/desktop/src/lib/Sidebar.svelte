@@ -2,7 +2,7 @@
   import { deleteApi, saveApi, type ApiDto, type EndpointDto } from "./ipc";
   import { emptyApi, emptyEndpoint, serializeApi, slugify } from "./model";
   import { currentDoc, updateDoc } from "./doc.svelte";
-  import { reload, select, ui } from "./state.svelte";
+  import { canWriteApiDoc, reload, select, ui } from "./state.svelte";
 
   function matches(ep: EndpointDto, query: string): boolean {
     if (!query) return true;
@@ -42,6 +42,7 @@
     const buffer = ui.buffers[api.id];
     return buffer !== undefined && buffer !== api.text;
   }
+
 
   // --- Inline "New API" row -------------------------------------------------
   let creatingApi = $state(false);
@@ -121,6 +122,7 @@
   let newEndpointBusy = $state(false);
 
   function startCreateEndpoint(api: ApiDto): void {
+    if (!canWriteApiDoc(api.id)) return;
     creatingEndpointFor = api.id;
     newEndpointName = "";
     newEndpointError = null;
@@ -133,6 +135,11 @@
   }
 
   async function submitCreateEndpoint(api: ApiDto): Promise<void> {
+    if (!canWriteApiDoc(api.id)) {
+      newEndpointError =
+        "A save or delete is in progress for this API — wait for it to finish.";
+      return;
+    }
     const trimmed = newEndpointName.trim();
     if (!trimmed) {
       newEndpointError = "Enter a name.";
@@ -147,6 +154,7 @@
 
     newEndpointBusy = true;
     newEndpointError = null;
+    ui.savingIds[api.id] = true;
     try {
       // `updateDoc` mutates the buffer of whatever API is currently
       // selected, so select this one first — this also means any unsaved
@@ -185,6 +193,7 @@
       newEndpointError = e instanceof Error ? e.message : String(e);
     } finally {
       newEndpointBusy = false;
+      delete ui.savingIds[api.id];
     }
   }
 
@@ -269,6 +278,7 @@
   }
 
   function startDeleteEndpoint(api: ApiDto, endpoint: EndpointDto): void {
+    if (!canWriteApiDoc(api.id)) return;
     confirmingDeleteEndpoint = endpointKey(api, endpoint);
     deleteEndpointError = null;
   }
@@ -282,8 +292,14 @@
     api: ApiDto,
     endpoint: EndpointDto,
   ): Promise<void> {
+    if (!canWriteApiDoc(api.id)) {
+      deleteEndpointError =
+        "A save or delete is in progress for this API — wait for it to finish.";
+      return;
+    }
     deleteEndpointBusy = true;
     deleteEndpointError = null;
+    ui.savingIds[api.id] = true;
     try {
       select({ apiId: api.id, endpointId: null });
       const doc = currentDoc();
@@ -312,6 +328,7 @@
       deleteEndpointError = e instanceof Error ? e.message : String(e);
     } finally {
       deleteEndpointBusy = false;
+      delete ui.savingIds[api.id];
     }
   }
 </script>
@@ -363,6 +380,10 @@
           <button
             type="button"
             class="link-button"
+            disabled={!canWriteApiDoc(api.id)}
+            title={canWriteApiDoc(api.id)
+              ? undefined
+              : "A save or delete is in progress for this API"}
             onclick={() => startCreateEndpoint(api)}
           >
             + New endpoint
@@ -472,6 +493,10 @@
                 <button
                   type="button"
                   class="link-button link-button-danger endpoint-delete"
+                  disabled={!canWriteApiDoc(api.id)}
+                  title={canWriteApiDoc(api.id)
+                    ? undefined
+                    : "A save or delete is in progress for this API"}
                   onclick={() => startDeleteEndpoint(api, endpoint)}
                   aria-label={`Delete ${endpoint.name}`}
                 >

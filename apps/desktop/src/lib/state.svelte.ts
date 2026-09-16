@@ -32,16 +32,17 @@ export const ui = $state({
   // clean save. Never implies the buffer itself was touched — reload()
   // never overwrites a dirty buffer.
   diskChanged: {} as Record<string, boolean>,
-  // apiId -> true while a `save_api` (RequestPanel's Save button/Ctrl+S) or
-  // `delete_api` (Sidebar's Delete) call is in flight for that api. Shared
-  // here — not component-local state — because the two actions live in two
-  // different components (RequestPanel, Sidebar) that both write the same
-  // file: without a shared registry, a save in flight when a delete lands
-  // can resurrect a "deleted" file (the save writes it back right after
-  // delete removes it), or a delete in flight when a save lands can drop
-  // the save silently. Both directions are guarded by checking the OTHER
-  // map before starting: `canSave` refuses while `deletingIds` is set, and
-  // Sidebar refuses to start (or confirm) a delete while `savingIds` is set.
+  // apiId -> true while a `save_api` call is in flight for that api —
+  // RequestPanel's Save button/Ctrl+S, or Sidebar's New endpoint/Delete
+  // endpoint (both edit-then-save the same document). apiId -> true while a
+  // `delete_api` call (Sidebar's Delete) is in flight for that api. Shared
+  // here — not component-local state — because these actions live in two
+  // different components (RequestPanel, Sidebar) that all read or write the
+  // same file: without a shared registry, any two of them racing on the
+  // same api can silently drop one write (a just-added endpoint vanishing,
+  // an edit in the JSON tab being overwritten) or resurrect a file
+  // `delete_api` just removed, with no error from either side. See
+  // `canWriteApiDoc` below, the one place that reads both maps.
   savingIds: {} as Record<string, boolean>,
   deletingIds: {} as Record<string, boolean>,
   search: "",
@@ -87,6 +88,22 @@ export function isSelectionLive(): boolean {
 /** True while a send can actually be triggered for the current selection. */
 export function canSendSelected(): boolean {
   return isSelectionLive() && !ui.running;
+}
+
+/**
+ * Whether a NEW `saveApi(apiId, ...)` call may safely be started for this
+ * api id right now. The one check shared by every path that writes an
+ * API's document: RequestPanel's Save button/Ctrl+S, and Sidebar's New
+ * endpoint and Delete endpoint (both mutate the buffer via `updateDoc` and
+ * then save it, exactly like a manual JSON edit would). Refuses while
+ * another save for the same api is already in flight (`savingIds`) or while
+ * the whole api is being deleted (`deletingIds`) — without this, two writes
+ * racing on the same file can silently drop one of them (whichever
+ * `saveApi` resolves last wins, with no error from the loser), or a save
+ * can write a file back moments after `delete_api` removed it.
+ */
+export function canWriteApiDoc(apiId: string): boolean {
+  return !ui.savingIds[apiId] && !ui.deletingIds[apiId];
 }
 
 /**
