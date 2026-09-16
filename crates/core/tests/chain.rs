@@ -542,19 +542,13 @@ async fn derived_tokens_are_exposed_so_the_caller_can_mask_them() {
     let api = api(&server.uri(), CHAIN);
     let mut ex = executor();
     ex.run(&api, "business", Some("test")).await.unwrap();
-    let derived = ex.derived_values();
-    assert!(
-        derived.contains(&"token-1".to_string()),
-        "the chain token must be exposed: {derived:?}"
-    );
-    // Final review, finding 3: a credential DERIVED from secrets — here the
-    // base64 of the `/token` endpoint's Basic auth — contains no literal secret
-    // substring, so `apply_static` now reports it and it joins the mask list too.
-    assert!(
-        derived.contains(&"YWxpY2U6aHVudGVyMg==".to_string()),
-        "a static auth credential must be exposed for masking: {derived:?}"
-    );
-    assert_eq!(derived.len(), 2, "nothing else: {derived:?}");
+    // Only chain-derived tokens belong in the GLOBAL mask list. A static auth
+    // credential (here the base64 of the `/token` endpoint's Basic auth) must not
+    // join it: it is reported by name instead, via `auth_headers()`, because an
+    // ordinary static auth value like `X-Api-Version: 1` fed to a global substring
+    // mask would replace unrelated text all over the printed request.
+    assert_eq!(ex.derived_values(), vec!["token-1".to_string()]);
+    assert_eq!(ex.auth_headers(), vec!["Authorization".to_string()]);
 }
 
 /// Cross-checks `validate::validate_api`'s depth guard against the runtime's:

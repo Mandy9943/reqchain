@@ -175,7 +175,10 @@ async fn run(
                         mask_all(&e.to_string(), &mask_values)
                     );
                 }
-                println!("{}", shell::to_shell_command(&req.masked(&mask_values)));
+                // Secrets and chain tokens are masked globally; a static auth
+                // credential is redacted only on the header it was set on.
+                let masked = req.masked_with(&mask_values, &executor.auth_headers());
+                println!("{}", shell::to_shell_command(&masked));
                 ExitCode::SUCCESS
             }
         };

@@ -425,3 +425,67 @@ async fn a_transport_failure_exits_2() {
     );
     assert!(stderr.contains("transport error"), "got: {stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// Regression from the finding-3 fix (display-only): feeding EVERY static auth
+// value into the GLOBAL substring mask destroyed the printed command, because
+// masking is unanchored and had no minimum length. `X-Api-Version: 1` turned
+// every `1` in the URL and in unrelated headers into `***`. Static auth values
+// are now redacted by header NAME instead.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ordinary_header_auth_values_do_not_corrupt_the_printed_command() {
+    let server = MockServer::start().await;
+    let api = api_file(
+        &server.uri(),
+        r#"{
+      "id": "items",
+      "name": "Items",
+      "method": "GET",
+      "path": "/v1/items/1",
+      "query": { "page": "1" },
+      "headers": { "X-Note": "version 1 of public-client-id" },
+      "auth": {
+        "type": "header",
+        "headers": { "X-Api-Version": "1", "X-Client": "public-client-id" }
+      }
+    }"#,
+    );
+    let dir = workspace(&api, serde_json::json!({}));
+
+    let out = bin()
+        .args(["run", "t", "items", "--print-command"])
+        .env("REQCHAIN_DIR", dir.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("curl "), "got: {stdout}");
+
+    // The URL — host, port, path and query — must survive intact.
+    assert!(
+        stdout.contains(&format!("'{}/v1/items/1?page=1'", server.uri())),
+        "the URL was corrupted by auth masking: {stdout}"
+    );
+    // An unrelated header that merely happens to contain the same characters
+    // must survive intact too.
+    assert!(
+        stdout.contains("X-Note: version 1 of public-client-id"),
+        "an unrelated header was corrupted by auth masking: {stdout}"
+    );
+    // Only the two auth header values are redacted.
+    assert!(
+        stdout.contains("X-Api-Version: ***"),
+        "the auth header value must be redacted: {stdout}"
+    );
+    assert!(
+        stdout.contains("X-Client: ***"),
+        "the auth header value must be redacted: {stdout}"
+    );
+    assert_eq!(
+        stdout.matches("***").count(),
+        2,
+        "exactly the two auth header values, nothing else: {stdout}"
+    );
+}

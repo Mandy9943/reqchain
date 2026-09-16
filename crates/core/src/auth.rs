@@ -32,16 +32,22 @@ fn set_header(req: &mut EffectiveRequest, name: &str, value: String) {
 }
 
 /// Applies the endpoint's resolved static auth to `req`, and returns every
-/// credential value it set. Those values are derived from secrets rather than
-/// being secrets themselves — a `computed` header, or the base64 of a Basic
-/// credential, contains no literal secret substring — so the caller must add
-/// them to its mask list, exactly as it does for chain-derived tokens.
+/// credential it set as a `(header name, value)` pair.
+///
+/// Those values are derived from secrets rather than being secrets themselves —
+/// a `computed` header, or the base64 of a Basic credential, contains no literal
+/// secret substring — so a caller that displays the request must redact them.
+/// It must do so BY NAME, redacting the value of the header each one was set on:
+/// a static auth value is not a secret that can turn up anywhere, and an ordinary
+/// one like `X-Api-Version: 1` would wreck the whole display if it were fed to a
+/// global substring mask. Secret-store literals and chain-derived tokens are the
+/// values that do need global masking.
 pub fn apply_static(
     api: &Api,
     endpoint: &Endpoint,
     scope: &Scope,
     req: &mut EffectiveRequest,
-) -> Result<Vec<String>, AuthError> {
+) -> Result<Vec<(String, String)>, AuthError> {
     let mut applied = Vec::new();
     match resolve(api, endpoint) {
         Auth::Inherit | Auth::None => {}
@@ -51,28 +57,28 @@ pub fn apply_static(
             let encoded =
                 base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
             set_header(req, "Authorization", format!("Basic {encoded}"));
-            applied.push(encoded);
+            applied.push(("Authorization".to_string(), encoded));
         }
         Auth::Bearer { token } => {
             let value = scope.interpolate(token)?;
             set_header(req, "Authorization", format!("Bearer {value}"));
-            applied.push(value);
+            applied.push(("Authorization".to_string(), value));
         }
         Auth::Header { headers } => {
             for (k, v) in headers {
                 let value = scope.interpolate(v)?;
                 set_header(req, k, value.clone());
-                applied.push(value);
+                applied.push((k.clone(), value));
             }
         }
         Auth::Computed { name, expression } => {
             let value = expr::eval(expression, scope)?;
             set_header(req, name, value.clone());
-            applied.push(value);
+            applied.push((name.clone(), value));
         }
         // Chained auth needs I/O; `chain::Executor` owns it.
         Auth::Chained { .. } => {}
     }
-    applied.retain(|v| !v.is_empty());
+    applied.retain(|(_, v)| !v.is_empty());
     Ok(applied)
 }

@@ -7,6 +7,11 @@ pub enum BuildError {
     Var(#[from] VarError),
 }
 
+/// Shortest value the global substring mask will act on. A shorter one matches so
+/// much unrelated text that redacting it destroys the display without protecting
+/// anything a reader could not already see.
+pub const MIN_MASKABLE_LEN: usize = 6;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectiveBody {
     Text {
@@ -35,16 +40,34 @@ pub struct EffectiveRequest {
 
 impl EffectiveRequest {
     /// Replaces every secret value with `***`, for display and shell export.
-    ///
-    /// A value that reaches the URL — a secret used in a query parameter, or a
-    /// chain token injected with `inject.into: "query"` — is stored
-    /// percent-encoded, so a literal-substring match never finds it: the secret
-    /// `p@ss/w+rd=` is in the URL as `p%40ss%2Fw%2Brd%3D`. Each value is
-    /// therefore redacted in both forms, using the same encoder `build` used.
     pub fn masked(&self, secrets: &[String]) -> EffectiveRequest {
+        self.masked_with(secrets, &[])
+    }
+
+    /// As [`EffectiveRequest::masked`], and additionally redacts the value of every
+    /// header in `auth_headers` — the names [`crate::auth::apply_static`] reported.
+    ///
+    /// The two mechanisms are deliberately different:
+    ///
+    /// - `secrets` are masked GLOBALLY, by substring, because a secret-store literal
+    ///   or a chain-derived token can turn up anywhere: the URL, a query parameter,
+    ///   a header or the body. A value that reaches the URL is stored
+    ///   percent-encoded, so a literal match alone never finds it — the secret
+    ///   `p@ss/w+rd=` is in the URL as `p%40ss%2Fw%2Brd%3D` — and each value is
+    ///   therefore redacted in both forms, using the same encoder `build` used.
+    /// - `auth_headers` are redacted BY NAME, never by substring. A static auth
+    ///   value is not a secret that could appear elsewhere, and feeding an ordinary
+    ///   one such as `X-Api-Version: 1` to the global mask would replace every `1`
+    ///   in the URL and in unrelated headers.
+    ///
+    /// Values shorter than [`MIN_MASKABLE_LEN`] are skipped in the global list as a
+    /// belt-and-braces guard: a pathologically short value there would do the same
+    /// damage. It is a backstop, not the mechanism — auth values are kept out of
+    /// that list in the first place.
+    pub fn masked_with(&self, secrets: &[String], auth_headers: &[String]) -> EffectiveRequest {
         let forms: Vec<String> = secrets
             .iter()
-            .filter(|s| !s.is_empty())
+            .filter(|s| s.chars().count() >= MIN_MASKABLE_LEN)
             .flat_map(|s| {
                 let encoded = urlencode(s);
                 if encoded == *s {
@@ -61,6 +84,7 @@ impl EffectiveRequest {
             }
             out
         };
+        let is_auth_header = |name: &str| auth_headers.iter().any(|h| h.eq_ignore_ascii_case(name));
         EffectiveRequest {
             method: self.method,
             url: mask(&self.url),
@@ -70,7 +94,10 @@ impl EffectiveRequest {
                 .map(|(k, v)| {
                     let masked = mask(v);
                     if k.eq_ignore_ascii_case("authorization") {
+                        // Keep the scheme, hide the credential, whatever set it.
                         (k.clone(), redact_credential(&masked))
+                    } else if is_auth_header(k) {
+                        (k.clone(), "***".to_string())
                     } else {
                         (k.clone(), masked)
                     }

@@ -25,6 +25,7 @@ pub struct Executor {
     cache: TokenCache,
     secrets: Secrets,
     derived: Vec<String>,
+    auth_headers: Vec<String>,
 }
 
 impl Executor {
@@ -34,6 +35,7 @@ impl Executor {
             cache,
             secrets,
             derived: Vec::new(),
+            auth_headers: Vec::new(),
         }
     }
 
@@ -48,9 +50,24 @@ impl Executor {
         self.derived.clone()
     }
 
+    /// Every header name a static auth has written a credential to. A caller that
+    /// displays a request must redact these headers' values BY NAME: unlike a secret
+    /// or a chain token, a static auth value (`X-Api-Version: 1`, say) is not
+    /// something that may appear elsewhere, and masking it globally by substring
+    /// would corrupt unrelated parts of the display.
+    pub fn auth_headers(&self) -> Vec<String> {
+        self.auth_headers.clone()
+    }
+
     fn remember(&mut self, value: &str) {
         if !value.is_empty() && !self.derived.iter().any(|v| v == value) {
             self.derived.push(value.to_string());
+        }
+    }
+
+    fn remember_auth_header(&mut self, name: &str) {
+        if !name.is_empty() && !self.auth_headers.iter().any(|h| h == name) {
+            self.auth_headers.push(name.to_string());
         }
     }
 
@@ -92,8 +109,8 @@ impl Executor {
         })?;
         let scope = Scope::new(api, endpoint, env, &self.secrets);
         let mut req = request::build(api, endpoint, &scope)?;
-        for value in auth::apply_static(api, endpoint, &scope, &mut req)? {
-            self.remember(&value);
+        for (header, _value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
+            self.remember_auth_header(&header);
         }
 
         let resolved = auth::resolve(api, endpoint).clone();
@@ -168,8 +185,8 @@ impl Executor {
         })?;
         let scope = Scope::new(api, endpoint, env, &self.secrets);
         let mut req = request::build(api, endpoint, &scope)?;
-        for value in auth::apply_static(api, endpoint, &scope, &mut req)? {
-            self.remember(&value);
+        for (header, _value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
+            self.remember_auth_header(&header);
         }
 
         let resolved = auth::resolve(api, endpoint).clone();
@@ -234,7 +251,7 @@ impl Executor {
             // A credential that cannot be resolved (an unknown secret, say) is not a
             // fingerprinting concern: the run itself is about to fail on it.
             if let Ok(values) = auth::apply_static(api, ep, &scope, &mut probe) {
-                for v in values {
+                for (_, v) in values {
                     material.push_str(&v);
                     material.push('\u{0}');
                 }
