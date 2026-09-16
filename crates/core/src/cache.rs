@@ -62,7 +62,22 @@ impl TokenCache {
         let Some(file) = &self.file else { return Ok(()) };
         if let Some(parent) = file.parent() { std::fs::create_dir_all(parent)? }
         let text = serde_json::to_string_pretty(&self.entries).unwrap_or_else(|_| "{}".into());
-        std::fs::write(file, text)?;
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(file)?;
+            f.write_all(text.as_bytes())?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(file, &text)?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

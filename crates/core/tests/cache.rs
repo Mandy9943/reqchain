@@ -54,6 +54,8 @@ fn persists_across_instances_with_owner_only_permissions() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::at(dir.path());
     let k = TokenCache::key("api", &auth_a(), "test");
+
+    // Test new file creation with secure permissions
     {
         let mut c = TokenCache::persistent(&paths);
         c.put(&k, "tok".into(), Some(9_999_999_999));
@@ -67,5 +69,19 @@ fn persists_across_instances_with_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(paths.cache_file()).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "token cache must be owner-only");
+
+        // Test repair of pre-existing file with wider permissions
+        std::fs::set_permissions(paths.cache_file(), std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mode_before = std::fs::metadata(paths.cache_file()).unwrap().permissions().mode();
+        assert_eq!(mode_before & 0o777, 0o644, "pre-existing file is set to 0o644");
+
+        {
+            let mut c = TokenCache::persistent(&paths);
+            c.put(&k, "updated".into(), Some(9_999_999_999));
+            c.save().unwrap();
+        }
+
+        let mode_after = std::fs::metadata(paths.cache_file()).unwrap().permissions().mode();
+        assert_eq!(mode_after & 0o777, 0o600, "save() must tighten pre-existing file to 0o600");
     }
 }
