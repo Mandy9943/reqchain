@@ -12,6 +12,8 @@ sha1 = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
 chrono = "0.4"
+serde_json_path = "0.7"
+regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 tokio.workspace = true
 
@@ -19,5 +21,7 @@ tokio.workspace = true
 tempfile = "3"
 md5_simple = { package = "md5", version = "0.7" }
 chrono = "0.4"
+serde_json_path = "0.7"
+regex = "1"
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

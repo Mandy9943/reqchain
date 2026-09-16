@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "id": "chain",
+  "name": "Chain",
+  "baseUrl": "BASE_URL",
+  "variables": {},
+  "environments": [
+    {
+      "name": "test",
+      "variables": {
+        "documento": "12345678"
+      }
+    }
+  ],
+  "auth": {
+    "type": "none"
+  },
+  "endpoints": [
+    {
+      "id": "token",
+      "name": "Token",
+      "method": "POST",
+      "path": "/token",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "basic",
+        "username": "{{secret:GW_USER}}",
+        "password": "{{secret:GW_PASS}}"
+      },
+      "body": {
+        "type": "form",
+        "fields": {
+          "grant_type": "client_credentials"
+        }
+      }
+    },
+    {
+      "id": "business",
+      "name": "Business",
+      "method": "POST",
+      "path": "/business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token"
+        },
+        "extract": {
+          "from": "body",
+          "jsonPath": "$.access_token"
+        },
+        "ttl": {
+          "from": "body",
+          "jsonPath": "$.expires_in",
+          "unit": "seconds"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
+        },
+        "retryOn": [401, 403]
+      },
+      "body": {
+        "type": "json",
+        "content": {
+          "doc": "{{documento}}"
+        }
+      }
+    },
+    {
+      "id": "header-business",
+      "name": "Header business",
+      "method": "GET",
+      "path": "/header-business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token"
+        },
+        "extract": {
+          "from": "header",
+          "name": "x-token"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
+        }
+      }
+    },
+    {
+      "id": "query-business",
+      "name": "Query business",
+      "method": "GET",
+      "path": "/query-business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token"
+        },
+        "extract": {
+          "from": "body",
+          "jsonPath": "$.access_token"
+        },
+        "inject": {
+          "into": "query",
+          "name": "access_token"
+        }
+      }
+    }
+  ]
+}

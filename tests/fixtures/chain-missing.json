@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "chain-missing",
+  "name": "Chain missing",
+  "baseUrl": "BASE_URL",
+  "variables": {},
+  "environments": [
+    {
+      "name": "test",
+      "variables": {
+        "documento": "12345678"
+      }
+    }
+  ],
+  "auth": {
+    "type": "none"
+  },
+  "endpoints": [
+    {
+      "id": "business",
+      "name": "Business",
+      "method": "GET",
+      "path": "/business",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "nonexistent"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
+        }
+      }
+    }
+  ]
+}
