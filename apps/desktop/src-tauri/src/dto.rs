@@ -1,5 +1,5 @@
 use reqchain_core::exec::{AuthStep, RunResult};
-use reqchain_core::request::{redact, EffectiveBody, EffectiveRequest};
+use reqchain_core::request::{redact_display, EffectiveBody, EffectiveRequest};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,8 +153,15 @@ fn effective_body_text(body: &EffectiveBody) -> Option<String> {
     })
 }
 
-impl From<&EffectiveRequest> for EffectiveDto {
-    fn from(req: &EffectiveRequest) -> EffectiveDto {
+impl EffectiveDto {
+    /// The only constructor. Deliberately not a public `From<&EffectiveRequest>`
+    /// impl (any external caller could build a DTO straight from an
+    /// unmasked request with nothing but a doc comment stopping them) and
+    /// deliberately not exported past this crate: every call site that
+    /// reaches this function lives in `dto.rs` or `commands.rs`, and every
+    /// one of them passes a request that has already been through
+    /// `masked_with`.
+    pub(crate) fn from_masked(req: &EffectiveRequest) -> EffectiveDto {
         EffectiveDto {
             method: req.method.as_str().to_string(),
             url: req.url.clone(),
@@ -170,44 +177,66 @@ impl From<&EffectiveRequest> for EffectiveDto {
 
 impl AuthStepDto {
     /// `step.request`, when present, is the raw request the executor sent to
-    /// the auth endpoint — not masked yet — so it is masked here with the
-    /// same `mask`/`auth_headers` every other request crossing into the DTO
-    /// layer goes through (the masking contract in the task brief). `step.body`
-    /// is the auth endpoint's raw response body, which can hold the token
-    /// verbatim, so it is passed through the same string-level `redact` the
-    /// top-level response body uses.
-    fn from_step(step: &AuthStep, mask: &[String], auth_headers: &[String]) -> AuthStepDto {
+    /// the auth endpoint — not masked yet — so it is masked here with
+    /// `request_mask`/`auth_headers`, the same pair every REQUEST crossing
+    /// into the DTO layer goes through (the masking contract in the task
+    /// brief). `step.body` is the auth endpoint's raw RESPONSE body, which
+    /// can hold the token verbatim, so it goes through `response_mask`
+    /// instead — the broader list that also covers static auth credential
+    /// values a server might echo back (see `commands::response_mask`).
+    fn from_step(
+        step: &AuthStep,
+        request_mask: &[String],
+        response_mask: &[String],
+        auth_headers: &[String],
+    ) -> AuthStepDto {
         let masked_request = step
             .request
             .as_ref()
-            .map(|r| r.masked_with(mask, auth_headers));
+            .map(|r| r.masked_with(request_mask, auth_headers));
         AuthStepDto {
             endpoint_id: step.endpoint_id.clone(),
-            request: masked_request.as_ref().map(EffectiveDto::from),
+            request: masked_request.as_ref().map(EffectiveDto::from_masked),
             status: if step.from_cache {
                 None
             } else {
                 Some(step.status)
             },
-            body: redact(&step.body, mask),
+            body: redact_display(&step.body, response_mask),
             from_cache: step.from_cache,
         }
     }
 }
 
 impl RunDto {
-    /// Builds the DTO for a finished run. `mask` must be the executor's
-    /// derived tokens plus every secret value
-    /// (`executor.derived_values()` extended with `secrets.values()`);
-    /// `auth_headers` must be `executor.auth_headers()`. Every string that
-    /// could carry a credential — the effective request, each auth-trace
-    /// request and body, and the response body — is masked or redacted
-    /// here; this is the only place a `RunDto` may be built from a raw
-    /// `RunResult`.
-    pub fn from_result(result: &RunResult, mask: &[String], auth_headers: &[String]) -> RunDto {
-        let masked_effective = result.effective.masked_with(mask, auth_headers);
+    /// Builds the DTO for a finished run.
+    ///
+    /// `request_mask` masks anything shaped like a REQUEST we built — the
+    /// effective request and each auth-trace request — and must be the
+    /// executor's derived tokens plus every secret value
+    /// (`executor.derived_values()` extended with `secrets.values()`), the
+    /// same list `auth::apply_static`'s by-name masking deliberately keeps
+    /// static auth credential values out of.
+    ///
+    /// `response_mask` masks anything a SERVER sent back — the response
+    /// body, its headers, and each auth-trace body — and must additionally
+    /// include `executor.static_values()`: a server can echo a static
+    /// credential (a Basic blob, a computed header) verbatim, and that is
+    /// not covered by by-name masking, which only touches the request we
+    /// sent. `auth_headers` must be `executor.auth_headers()`.
+    ///
+    /// This is the only place a `RunDto` may be built from a raw
+    /// `RunResult` — every string that could carry a credential is masked
+    /// or redacted here.
+    pub fn from_result(
+        result: &RunResult,
+        request_mask: &[String],
+        response_mask: &[String],
+        auth_headers: &[String],
+    ) -> RunDto {
+        let masked_effective = result.effective.masked_with(request_mask, auth_headers);
         let (body, body_is_binary) = match std::str::from_utf8(&result.body) {
-            Ok(text) => (redact(text, mask), false),
+            Ok(text) => (redact_display(text, response_mask), false),
             Err(_) => (String::new(), true),
         };
         RunDto {
@@ -217,15 +246,15 @@ impl RunDto {
             headers: result
                 .headers
                 .iter()
-                .map(|(k, v)| [k.clone(), redact(v, mask)])
+                .map(|(k, v)| [k.clone(), redact_display(v, response_mask)])
                 .collect(),
             body,
             body_is_binary,
-            effective: EffectiveDto::from(&masked_effective),
+            effective: EffectiveDto::from_masked(&masked_effective),
             auth_trace: result
                 .auth_trace
                 .iter()
-                .map(|s| AuthStepDto::from_step(s, mask, auth_headers))
+                .map(|s| AuthStepDto::from_step(s, request_mask, response_mask, auth_headers))
                 .collect(),
         }
     }

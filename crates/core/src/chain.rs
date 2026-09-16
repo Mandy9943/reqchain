@@ -26,6 +26,7 @@ pub struct Executor {
     secrets: Secrets,
     derived: Vec<String>,
     auth_headers: Vec<String>,
+    static_values: Vec<String>,
 }
 
 impl Executor {
@@ -36,11 +37,25 @@ impl Executor {
             secrets,
             derived: Vec::new(),
             auth_headers: Vec::new(),
+            static_values: Vec::new(),
         }
     }
 
     pub fn cache_mut(&mut self) -> &mut TokenCache {
         &mut self.cache
+    }
+
+    /// Replaces the secret store this executor resolves `{{secret:...}}`
+    /// against. Without this, an executor created once at startup keeps
+    /// interpolating a secret's value from the moment it was constructed —
+    /// after a rotation or deletion, it would keep sending the stale value
+    /// on the wire while only the NEW value is known to be sensitive
+    /// (present in a caller's mask), so the stale one would appear
+    /// unmasked in the effective request, the curl export and history.
+    /// Callers that hold a long-lived `Executor` (the desktop app's
+    /// `AppState`) must call this whenever the secret store is reloaded.
+    pub fn set_secrets(&mut self, secrets: Secrets) {
+        self.secrets = secrets;
     }
 
     /// Every token this executor has derived from an auth response. They are not
@@ -59,6 +74,18 @@ impl Executor {
         self.auth_headers.clone()
     }
 
+    /// Every literal value a *static* auth mechanism (basic, bearer, header,
+    /// computed) has set on a request so far — a Basic base64 blob, a fixed
+    /// bearer token, a computed header's value. These are not secrets or
+    /// chain-derived tokens, so they must never join the global REQUEST mask
+    /// (that would corrupt unrelated request output — see `auth_headers`);
+    /// but a server can echo one of them back in a response body or header,
+    /// so a caller building a RESPONSE-side mask (for the response body, its
+    /// headers, or history) should extend it with these.
+    pub fn static_values(&self) -> Vec<String> {
+        self.static_values.clone()
+    }
+
     fn remember(&mut self, value: &str) {
         if !value.is_empty() && !self.derived.iter().any(|v| v == value) {
             self.derived.push(value.to_string());
@@ -68,6 +95,12 @@ impl Executor {
     fn remember_auth_header(&mut self, name: &str) {
         if !name.is_empty() && !self.auth_headers.iter().any(|h| h == name) {
             self.auth_headers.push(name.to_string());
+        }
+    }
+
+    fn remember_static_value(&mut self, value: &str) {
+        if !value.is_empty() && !self.static_values.iter().any(|v| v == value) {
+            self.static_values.push(value.to_string());
         }
     }
 
@@ -109,8 +142,9 @@ impl Executor {
         })?;
         let scope = Scope::new(api, endpoint, env, &self.secrets);
         let mut req = request::build(api, endpoint, &scope)?;
-        for (header, _value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
+        for (header, value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
             self.remember_auth_header(&header);
+            self.remember_static_value(&value);
         }
 
         let resolved = auth::resolve(api, endpoint).clone();
@@ -185,8 +219,9 @@ impl Executor {
         })?;
         let scope = Scope::new(api, endpoint, env, &self.secrets);
         let mut req = request::build(api, endpoint, &scope)?;
-        for (header, _value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
+        for (header, value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
             self.remember_auth_header(&header);
+            self.remember_static_value(&value);
         }
 
         let resolved = auth::resolve(api, endpoint).clone();

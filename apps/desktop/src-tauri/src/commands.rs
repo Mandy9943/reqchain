@@ -38,8 +38,8 @@ fn dto_for_api(workspace: &Workspace, api: &Api, errors: &mut Vec<FileErrorDto>)
     }
 }
 
-pub fn load_workspace_inner(state: &AppState) -> WorkspaceDto {
-    state.reload();
+pub async fn load_workspace_inner(state: &AppState) -> WorkspaceDto {
+    state.reload().await;
     let workspace = state.workspace.lock().unwrap();
     let mut errors: Vec<FileErrorDto> = workspace.errors.iter().map(Into::into).collect();
     let apis = workspace
@@ -75,7 +75,7 @@ fn write_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn save_api_inner(
+pub async fn save_api_inner(
     state: &AppState,
     api_id: &str,
     text: &str,
@@ -105,7 +105,7 @@ pub fn save_api_inner(
         .unwrap_or_else(|| state.paths.apis_dir().join(format!("{api_id}.json")));
     write_atomically(&path, &api.to_json_string())
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    state.reload();
+    state.reload().await;
     Ok(diags)
 }
 
@@ -119,13 +119,44 @@ fn find_api(state: &AppState, api_id: &str) -> Result<Api, String> {
         .ok_or_else(|| format!("API `{api_id}` not found"))
 }
 
-/// The mask every request/response string must pass through before leaving
-/// Rust: the executor's chain-derived tokens plus every secret value. See
-/// `dto::RunDto::from_result` and the masking contract in the task brief.
-fn mask_for(state: &AppState, executor: &Executor) -> Vec<String> {
+/// The mask for anything shaped like a REQUEST we built — the effective
+/// request, the curl export, each auth-trace request: the executor's
+/// chain-derived tokens plus every secret value. Static auth credential
+/// values (a Basic blob, a `computed` header) are deliberately excluded —
+/// they are masked in the request by header NAME instead
+/// (`executor.auth_headers()`), and folding one into a global substring list
+/// would corrupt unrelated request output (the phase 1 regression this
+/// design avoids repeating). See `response_mask` for the broader list used
+/// on anything a server sent back.
+fn request_mask(state: &AppState, executor: &Executor) -> Vec<String> {
     let mut mask = executor.derived_values();
     mask.extend(state.secrets.lock().unwrap().values().cloned());
     mask
+}
+
+/// The mask for anything a SERVER sent back — the response body, response
+/// headers, each auth-trace body, and what gets written to history:
+/// `request_mask` extended with `executor.static_values()`, since a server
+/// can echo a static auth credential verbatim in its response even though
+/// that value never joins the request-display mask.
+fn response_mask(state: &AppState, executor: &Executor) -> Vec<String> {
+    let mut mask = request_mask(state, executor);
+    mask.extend(executor.static_values());
+    mask
+}
+
+/// Redacts an error string with whatever this executor knows is sensitive
+/// AT THE TIME OF THE FAILURE — computed after the failing call returns, not
+/// before, so a token the chain had already derived (and any static
+/// credential it had already applied) before the failure is included. Two
+/// concrete leaks this closes: `chain::RunError::Chain` can embed up to 200
+/// raw characters of an auth endpoint's response body (which routinely
+/// echoes back a rejected credential), and `exec::ExecError::Transport`'s
+/// message is built from `reqwest`'s `Display`, which appends the request
+/// URL — carrying a query-injected chain token in full.
+fn redact_error(state: &AppState, executor: &Executor, error: impl std::fmt::Display) -> String {
+    let mask = response_mask(state, executor);
+    reqchain_core::request::redact_display(&error.to_string(), &mask)
 }
 
 pub async fn run_endpoint_inner(
@@ -136,18 +167,19 @@ pub async fn run_endpoint_inner(
 ) -> Result<RunDto, String> {
     let api = find_api(state, api_id)?;
     let mut executor = state.executor.lock().await;
-    let result = executor
-        .run(&api, endpoint_id, env.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = match executor.run(&api, endpoint_id, env.as_deref()).await {
+        Ok(result) => result,
+        Err(e) => return Err(redact_error(state, &executor, e)),
+    };
 
-    let mask = mask_for(state, &executor);
+    let request_mask = request_mask(state, &executor);
+    let response_mask = response_mask(state, &executor);
     let auth_headers = executor.auth_headers();
-    let dto = RunDto::from_result(&result, &mask, &auth_headers);
+    let dto = RunDto::from_result(&result, &request_mask, &response_mask, &auth_headers);
 
-    let masked_effective = result.effective.masked_with(&mask, &auth_headers);
+    let masked_effective = result.effective.masked_with(&request_mask, &auth_headers);
     let store_bodies = api.history.as_ref().map(|h| h.store_bodies).unwrap_or(true);
-    let entry = history::entry_from(&result, &masked_effective, &mask, store_bodies);
+    let entry = history::entry_from(&result, &masked_effective, &response_mask, store_bodies);
     // A failed history append is a non-fatal warning: it must never hide a
     // response the user is about to see behind an error instead.
     if let Err(e) = history::append(&state.paths, api_id, endpoint_id, &entry) {
@@ -165,13 +197,15 @@ pub async fn preview_endpoint_inner(
 ) -> Result<EffectiveDto, String> {
     let api = find_api(state, api_id)?;
     let mut executor = state.executor.lock().await;
-    let req = executor
-        .prepare(&api, endpoint_id, env.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
-    let mask = mask_for(state, &executor);
+    let req = match executor.prepare(&api, endpoint_id, env.as_deref()).await {
+        Ok(req) => req,
+        Err(e) => return Err(redact_error(state, &executor, e)),
+    };
+    let mask = request_mask(state, &executor);
     let auth_headers = executor.auth_headers();
-    Ok(EffectiveDto::from(&req.masked_with(&mask, &auth_headers)))
+    Ok(EffectiveDto::from_masked(
+        &req.masked_with(&mask, &auth_headers),
+    ))
 }
 
 pub async fn curl_command_inner(
@@ -182,11 +216,11 @@ pub async fn curl_command_inner(
 ) -> Result<String, String> {
     let api = find_api(state, api_id)?;
     let mut executor = state.executor.lock().await;
-    let req = executor
-        .prepare(&api, endpoint_id, env.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
-    let mask = mask_for(state, &executor);
+    let req = match executor.prepare(&api, endpoint_id, env.as_deref()).await {
+        Ok(req) => req,
+        Err(e) => return Err(redact_error(state, &executor, e)),
+    };
+    let mask = request_mask(state, &executor);
     let auth_headers = executor.auth_headers();
     let masked = req.masked_with(&mask, &auth_headers);
     Ok(to_shell_command(&masked))
@@ -236,8 +270,8 @@ pub fn history(
 }
 
 #[tauri::command]
-pub fn load_workspace(state: tauri::State<AppState>) -> WorkspaceDto {
-    load_workspace_inner(&state)
+pub async fn load_workspace(state: tauri::State<'_, AppState>) -> Result<WorkspaceDto, String> {
+    Ok(load_workspace_inner(&state).await)
 }
 
 #[tauri::command]
@@ -246,12 +280,12 @@ pub fn lint(text: String) -> Vec<DiagnosticDto> {
 }
 
 #[tauri::command]
-pub fn save_api(
-    state: tauri::State<AppState>,
+pub async fn save_api(
+    state: tauri::State<'_, AppState>,
     api_id: String,
     text: String,
 ) -> Result<Vec<DiagnosticDto>, String> {
-    save_api_inner(&state, &api_id, &text)
+    save_api_inner(&state, &api_id, &text).await
 }
 
 #[cfg(test)]

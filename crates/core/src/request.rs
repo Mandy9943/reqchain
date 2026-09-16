@@ -19,7 +19,7 @@ pub const MASK_SENTINEL: &str = "***";
 /// with [`MASK_SENTINEL`]. Shared by [`EffectiveRequest::masked_with`] and
 /// `history::entry_from`, so there is exactly one place that decides what
 /// "redacted" means.
-pub fn redact(text: &str, values: &[String]) -> String {
+pub(crate) fn redact(text: &str, values: &[String]) -> String {
     let mut out = text.to_string();
     for v in values
         .iter()
@@ -28,6 +28,36 @@ pub fn redact(text: &str, values: &[String]) -> String {
         out = out.replace(v.as_str(), MASK_SENTINEL);
     }
     out
+}
+
+/// Expands each value long enough to mask into both its literal form and its
+/// percent-encoded form (when the two differ), exactly as [`EffectiveRequest::masked_with`]
+/// does for the URL and form-encoded bodies it builds. Shared so every other
+/// consumer that redacts free-form text — a response body, a response
+/// header, a history entry, an error message — catches a value that turns up
+/// percent-encoded, not just literal.
+pub fn expand_forms(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .filter(|s| s.chars().count() >= MIN_MASKABLE_LEN)
+        .flat_map(|s| {
+            let encoded = urlencode(s);
+            if encoded == *s {
+                vec![s.clone()]
+            } else {
+                vec![s.clone(), encoded]
+            }
+        })
+        .collect()
+}
+
+/// Redacts `text` against `values`, first expanding each value's
+/// percent-encoded form via [`expand_forms`]. This is the routine every
+/// caller OUTSIDE this module should use for anything that leaves Rust —
+/// response bodies, response headers, history entries, error strings — since
+/// the raw [`redact`] primitive alone misses a value echoed percent-encoded.
+pub fn redact_display(text: &str, values: &[String]) -> String {
+    redact(text, &expand_forms(values))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,18 +113,7 @@ impl EffectiveRequest {
     /// damage. It is a backstop, not the mechanism — auth values are kept out of
     /// that list in the first place.
     pub fn masked_with(&self, secrets: &[String], auth_headers: &[String]) -> EffectiveRequest {
-        let forms: Vec<String> = secrets
-            .iter()
-            .filter(|s| s.chars().count() >= MIN_MASKABLE_LEN)
-            .flat_map(|s| {
-                let encoded = urlencode(s);
-                if encoded == *s {
-                    vec![s.clone()]
-                } else {
-                    vec![s.clone(), encoded]
-                }
-            })
-            .collect();
+        let forms = expand_forms(secrets);
         let mask = |s: &String| redact(s, &forms);
         let is_auth_header = |name: &str| auth_headers.iter().any(|h| h.eq_ignore_ascii_case(name));
         EffectiveRequest {
@@ -260,4 +279,38 @@ pub(crate) fn urlencode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `redact` alone (the raw primitive) only catches the literal form —
+    /// this is exactly the gap `redact_display` exists to close.
+    #[test]
+    fn redact_display_catches_a_percent_encoded_occurrence_that_redact_misses() {
+        let secret = "p@ss/w+rd=1234".to_string();
+        let encoded = "p%40ss%2Fw%2Brd%3D1234"; // urlencode("p@ss/w+rd=1234")
+        let text = format!("Location: /redirect?token={encoded}");
+
+        assert!(
+            redact(&text, std::slice::from_ref(&secret)).contains(encoded),
+            "sanity check: the raw primitive must NOT catch the encoded form on its own"
+        );
+
+        let masked = redact_display(&text, &[secret]);
+        assert!(
+            !masked.contains(encoded),
+            "percent-encoded secret leaked: {masked}"
+        );
+        assert!(masked.contains(MASK_SENTINEL));
+    }
+
+    #[test]
+    fn redact_display_still_catches_the_literal_form() {
+        let secret = "literal-secret-value".to_string();
+        let masked = redact_display(&format!("body: {secret}"), std::slice::from_ref(&secret));
+        assert!(!masked.contains(&secret));
+        assert!(masked.contains(MASK_SENTINEL));
+    }
 }

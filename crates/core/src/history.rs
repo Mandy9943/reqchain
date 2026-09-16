@@ -47,12 +47,12 @@ pub fn entry_from(
                 .body
                 .as_ref()
                 .map(body_text)
-                .map(|b| request::redact(&b, mask))
+                .map(|b| request::redact_display(&b, mask))
         } else {
             None
         },
         response_body: if store_bodies {
-            Some(request::redact(&result.body_text(), mask))
+            Some(request::redact_display(&result.body_text(), mask))
         } else {
             None
         },

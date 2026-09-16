@@ -656,3 +656,78 @@ async fn a_six_level_chain_is_rejected_by_both_the_runtime_and_the_validator() {
         "validator must flag a chain the runtime rejects: {diags:?}"
     );
 }
+
+/// The `/token` endpoint in the fixture authenticates with Basic auth built
+/// from `GW_USER`/`GW_PASS` — a static credential, not a chain-derived
+/// token. It must show up in `static_values()` (for a caller to redact it
+/// out of a RESPONSE that echoes it back) but never in `derived_values()`
+/// (the GLOBAL request-display mask), which stays reserved for values the
+/// chain itself produced.
+#[tokio::test]
+async fn static_auth_credentials_are_exposed_separately_from_derived_tokens() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "token-1",
+            "expires_in": 3600,
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/business"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let api = api(&server.uri(), CHAIN);
+    let mut ex = executor();
+    ex.run(&api, "business", Some("test")).await.unwrap();
+
+    // base64("alice:hunter2")
+    assert_eq!(ex.static_values(), vec!["YWxpY2U6aHVudGVyMg==".to_string()]);
+    assert!(!ex
+        .derived_values()
+        .contains(&"YWxpY2U6aHVudGVyMg==".to_string()));
+}
+
+/// `set_secrets` must be a real replacement, not an accumulation: a long-lived
+/// `Executor` (the desktop app keeps one across every run) has to resolve
+/// `{{secret:...}}` against whatever the store currently holds, not whatever
+/// it held when the executor was constructed — otherwise a rotated or deleted
+/// secret keeps being sent (and, worse, is no longer in anyone's mask list).
+#[tokio::test]
+async fn set_secrets_changes_what_a_later_run_resolves() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(header(
+            "authorization",
+            // base64("alice:ROTATED")
+            "Basic YWxpY2U6Uk9UQVRFRA==",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "token-1",
+            "expires_in": 3600,
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/business"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let api = api(&server.uri(), CHAIN);
+    let mut ex = executor();
+    ex.set_secrets(Secrets::from_map([
+        ("GW_USER".into(), "alice".into()),
+        ("GW_PASS".into(), "ROTATED".into()),
+    ]));
+
+    // Succeeds only if the token request actually carried the rotated
+    // password — wiremock has no other mock for `/token`, so a stale
+    // credential would 404.
+    ex.run(&api, "business", Some("test")).await.unwrap();
+    assert_eq!(ex.static_values(), vec!["YWxpY2U6Uk9UQVRFRA==".to_string()]);
+}
