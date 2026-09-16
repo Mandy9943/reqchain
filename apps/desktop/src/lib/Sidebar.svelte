@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ui } from "./state.svelte";
+  import { select, ui } from "./state.svelte";
   import type { ApiDto, EndpointDto } from "./ipc";
 
   function matches(ep: EndpointDto, query: string): boolean {
@@ -17,8 +17,7 @@
   }
 
   function selectEndpoint(api: ApiDto, endpoint: EndpointDto): void {
-    ui.selected = { apiId: api.id, endpointId: endpoint.id };
-    ui.response = null;
+    select({ apiId: api.id, endpointId: endpoint.id });
   }
 
   function isSelected(api: ApiDto, endpoint: EndpointDto): boolean {

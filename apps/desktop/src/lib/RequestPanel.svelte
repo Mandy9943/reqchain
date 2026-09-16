@@ -1,6 +1,13 @@
 <script lang="ts">
   import { lint, previewEndpoint, saveApi, type DiagnosticDto } from "./ipc";
-  import { selectedApi, selectedEndpoint, ui } from "./state.svelte";
+  import {
+    discardLocalChanges,
+    selectedApi,
+    selectedApiOrRemoved,
+    selectedEndpoint,
+    selectedEndpointOrRemoved,
+    ui,
+  } from "./state.svelte";
   import Editor from "./Editor.svelte";
 
   let diagnostics = $state<DiagnosticDto[]>([]);
@@ -25,18 +32,32 @@
   let lintSeq = 0;
   let previewSeq = 0;
 
-  const api = $derived(selectedApi());
-  const endpoint = $derived(selectedEndpoint());
+  // `liveApi`/`liveEndpoint` are only defined when the current selection
+  // still resolves in the workspace — everything that talks to the backend
+  // (save, lint, preview) must gate on these, never on the display
+  // fallbacks below. `api`/`endpoint` fall back to the last-known snapshot
+  // of a removed selection (state.svelte.ts's `ui.removedSelected`) so the
+  // panel keeps showing it instead of going blank.
+  const liveApi = $derived(selectedApi());
+  const liveEndpoint = $derived(selectedEndpoint());
+  const api = $derived(selectedApiOrRemoved());
+  const endpoint = $derived(selectedEndpointOrRemoved());
+  const isRemoved = $derived(ui.removedSelected !== null);
   const bufferText = $derived(api ? ui.buffers[api.id] : undefined);
   const dirty = $derived(
     api !== undefined && bufferText !== undefined && bufferText !== api.text,
   );
-  const saving = $derived(api ? !!savingIds[api.id] : false);
+  const diskChanged = $derived(
+    liveApi !== undefined && !!ui.diskChanged[liveApi.id],
+  );
+  const saving = $derived(liveApi ? !!savingIds[liveApi.id] : false);
 
   // Seed the buffer for a newly selected API, without ever clobbering a
-  // buffer the user (or task 10's hot-reload logic) already owns.
+  // buffer the user (or task 10's hot-reload logic) already owns. Only
+  // meaningful for a live api — there's nothing to seed from once it's
+  // gone, and the buffer (if any) already exists from before it vanished.
   $effect(() => {
-    const current = api;
+    const current = liveApi;
     if (current && ui.buffers[current.id] === undefined) {
       ui.buffers[current.id] = current.text;
     }
@@ -46,7 +67,7 @@
   // (re-serialized) text, adopt it into the buffer — but only while the
   // buffer still holds exactly what we saved.
   $effect(() => {
-    const current = api;
+    const current = liveApi;
     if (!current) return;
     const clean = cleanSnapshot[current.id];
     if (
@@ -74,7 +95,7 @@
   // since-abandoned API/selection) landing after a newer one already did.
   $effect(() => {
     const text = bufferText;
-    if (!api || text === undefined) {
+    if (!liveApi || text === undefined) {
       return;
     }
     const handle = setTimeout(() => {
@@ -102,7 +123,10 @@
   // response that's no longer for the current selection/environment.
   $effect(() => {
     const sel = ui.selected;
-    if (!sel) {
+    if (!sel || !liveEndpoint) {
+      // No selection, or the selected endpoint no longer resolves (removed)
+      // — `preview_endpoint` needs a real endpoint id, so there's nothing
+      // to resolve.
       previewUrl = null;
       previewError = null;
       return;
@@ -136,18 +160,24 @@
     }
   }
 
+  /** Whether a save can actually be triggered for `apiId` right now. */
+  function canSave(apiId: string): boolean {
+    const text = ui.buffers[apiId];
+    const current = ui.workspace.apis.find((a) => a.id === apiId);
+    if (!current || text === undefined || text === current.text) return false;
+    return !savingIds[apiId]; // a save for this API must not already be in flight
+  }
+
   async function handleSave(): Promise<void> {
-    const current = api;
+    const current = liveApi;
     if (!current) return;
     // Capture everything off the reactive graph now — the selection (and
-    // hence `api`) can change while `saveApi` is in flight, and the
+    // hence `liveApi`) can change while `saveApi` is in flight, and the
     // continuation below must keep acting on the API it was actually asked
     // to save, never on whatever happens to be selected when it resolves.
     const apiId = current.id;
-    const savedApiText = current.text;
-    const text = ui.buffers[apiId];
-    if (text === undefined || text === savedApiText) return;
-    if (savingIds[apiId]) return; // a save for this API is already in flight
+    if (!canSave(apiId)) return;
+    const text = ui.buffers[apiId]!;
 
     const stillSelected = () => selectedApi()?.id === apiId;
     savingIds[apiId] = true;
@@ -162,6 +192,7 @@
       if (!hasError) {
         ui.buffers[apiId] = text;
         cleanSnapshot[apiId] = text;
+        ui.diskChanged[apiId] = false;
         if (ui.selected?.apiId === apiId) {
           previewGeneration++;
         }
@@ -174,18 +205,45 @@
       savingIds[apiId] = false;
     }
   }
+
+  /**
+   * Imperative entry point for the Ctrl+S shortcut (App.svelte, via
+   * `bind:this`). Returns whether a save was actually triggered, so the
+   * caller only calls `preventDefault` when the shortcut did something.
+   */
+  export function saveCurrent(): boolean {
+    const current = liveApi;
+    if (!current || !canSave(current.id)) return false;
+    void handleSave();
+    return true;
+  }
+
+  function handleDiscard(): void {
+    if (liveApi) {
+      discardLocalChanges(liveApi.id);
+    }
+  }
 </script>
 
 <div class="request-panel-inner">
   {#if !api || !endpoint}
     <p class="placeholder">Select an endpoint</p>
   {:else}
+    {#if isRemoved}
+      <div class="removed-banner">
+        This endpoint no longer exists in the workspace files — showing the
+        last known content{#if !liveApi} (the API file itself is gone){/if}.
+      </div>
+    {/if}
+
     <header class="summary">
       <div class="summary-row">
         <span class="method method-{endpoint.method.toLowerCase()}"
           >{endpoint.method}</span
         >
-        {#if previewUrl}
+        {#if isRemoved}
+          <span class="url url-error">endpoint removed</span>
+        {:else if previewUrl}
           <span class="url">{previewUrl}</span>
         {:else if previewError}
           <span class="url url-error">{previewError}</span>
@@ -195,10 +253,16 @@
       </div>
       <div class="summary-row">
         <span class="auth-kind">auth: {endpoint.authKind}</span>
+        {#if diskChanged}
+          <span class="badge badge-disk-changed">changed on disk</span>
+          <button type="button" class="discard-button" onclick={handleDiscard}>
+            Discard mine
+          </button>
+        {/if}
         <button
           type="button"
           class="save-button"
-          disabled={!dirty || saving}
+          disabled={!liveApi || !dirty || saving}
           onclick={handleSave}
         >
           {saving ? "Saving…" : "Save"}
@@ -327,6 +391,38 @@
   .save-error {
     font-size: 0.75rem;
     color: var(--color-error-text);
+  }
+
+  .removed-banner {
+    flex-shrink: 0;
+    font-size: 0.8rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-error-bg);
+    color: var(--color-error-text);
+    border: 1px solid var(--color-error-text);
+    border-radius: 4px;
+  }
+
+  .badge {
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+  }
+
+  .badge-disk-changed {
+    background: var(--color-method-put);
+    color: #1a1d21;
+  }
+
+  .discard-button {
+    flex-shrink: 0;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    cursor: pointer;
   }
 
   .editor-wrap {

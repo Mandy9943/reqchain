@@ -1,31 +1,25 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { curlCommand, runEndpoint, type AuthStepDto } from "./ipc";
-  import { ui } from "./state.svelte";
+  import { curlCommand, type AuthStepDto } from "./ipc";
+  import { canSendSelected, sendSelected, ui } from "./state.svelte";
 
   type Tab = "body" | "headers" | "effective" | "auth";
 
   let activeTab = $state<Tab>("body");
   let prettyBody = $state(true);
   let findQuery = $state("");
-  let runError = $state<string | null>(null);
   let copyState = $state<"idle" | "copying" | "copied" | "error">("idle");
   let copyError = $state<string | null>(null);
   let copyResetHandle: ReturnType<typeof setTimeout> | undefined;
-  // Bumped whenever the selection changes, so a `run_endpoint` response that
-  // arrives after the user has moved on to a different endpoint is dropped
-  // instead of being applied to the wrong selection — same sequence-counter
-  // shape RequestPanel.svelte uses for its lint/preview calls.
-  let runSeq = 0;
 
   const response = $derived(ui.response);
+  const runError = $derived(ui.runError);
 
   // Selection changed: drop feedback that belonged to whatever was
-  // previously on screen, and invalidate any in-flight run/copy for it.
+  // previously on screen (the in-flight run itself is invalidated by
+  // `select()`'s own sequence bump in state.svelte.ts).
   $effect(() => {
     void ui.selected;
-    runSeq++;
-    runError = null;
     copyState = "idle";
     copyError = null;
   });
@@ -114,36 +108,19 @@
     }
   }
 
-  async function handleSend(): Promise<void> {
-    if (ui.running) return;
-    const sel = ui.selected;
-    if (!sel) return;
-    // Capture everything the continuation needs off the reactive graph
-    // before the await — the selection can move on while the request is in
-    // flight, and the response must never land against a different one.
-    const apiId = sel.apiId;
-    const endpointId = sel.endpointId;
-    const env = ui.env[apiId] ?? null;
-    const seq = runSeq;
+  function handleSend(): void {
+    void sendSelected();
+  }
 
-    ui.running = true;
-    runError = null;
-    try {
-      const result = await runEndpoint(apiId, endpointId, env);
-      if (seq === runSeq) {
-        ui.response = result;
-        runError = null;
-      }
-    } catch (e) {
-      if (seq === runSeq) {
-        ui.response = null;
-        runError = e instanceof Error ? e.message : String(e);
-      }
-    } finally {
-      // Always release the lock — a stale response only skips *applying*
-      // its result, it must never leave Send permanently disabled.
-      ui.running = false;
-    }
+  /**
+   * Imperative entry point for the Ctrl+Enter shortcut (App.svelte, via
+   * `bind:this`). Returns whether a send was actually triggered, so the
+   * caller only calls `preventDefault` when the shortcut did something.
+   */
+  export function sendCurrent(): boolean {
+    if (!canSendSelected()) return false;
+    void sendSelected();
+    return true;
   }
 
   async function handleCopyCurl(): Promise<void> {
@@ -183,7 +160,7 @@
     <button
       type="button"
       class="send-button"
-      disabled={!ui.selected || ui.running}
+      disabled={!canSendSelected()}
       onclick={handleSend}
     >
       {ui.running ? "Sending…" : "Send"}
