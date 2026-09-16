@@ -32,7 +32,20 @@ pub struct Api {
     pub environments: Vec<Environment>,
     #[serde(default = "Auth::none")]
     pub auth: Auth,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<HistoryConfig>,
     pub endpoints: Vec<Endpoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryConfig {
+    #[serde(default = "default_true")]
+    pub store_bodies: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +85,20 @@ pub enum Method {
     Delete,
     Head,
     Options,
+}
+
+impl Method {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Put => "PUT",
+            Method::Patch => "PATCH",
+            Method::Delete => "DELETE",
+            Method::Head => "HEAD",
+            Method::Options => "OPTIONS",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

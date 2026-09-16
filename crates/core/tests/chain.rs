@@ -656,3 +656,210 @@ async fn a_six_level_chain_is_rejected_by_both_the_runtime_and_the_validator() {
         "validator must flag a chain the runtime rejects: {diags:?}"
     );
 }
+
+/// The `/token` endpoint in the fixture authenticates with Basic auth built
+/// from `GW_USER`/`GW_PASS` — a static credential, not a chain-derived
+/// token. It must show up in `static_values()` (for a caller to redact it
+/// out of a RESPONSE that echoes it back) but never in `derived_values()`
+/// (the GLOBAL request-display mask), which stays reserved for values the
+/// chain itself produced.
+#[tokio::test]
+async fn static_auth_credentials_are_exposed_separately_from_derived_tokens() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "token-1",
+            "expires_in": 3600,
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/business"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let api = api(&server.uri(), CHAIN);
+    let mut ex = executor();
+    ex.run(&api, "business", Some("test")).await.unwrap();
+
+    // base64("alice:hunter2")
+    assert_eq!(ex.static_values(), vec!["YWxpY2U6aHVudGVyMg==".to_string()]);
+    assert!(!ex
+        .derived_values()
+        .contains(&"YWxpY2U6aHVudGVyMg==".to_string()));
+}
+
+/// `set_secrets` must be a real replacement, not an accumulation: a long-lived
+/// `Executor` (the desktop app keeps one across every run) has to resolve
+/// `{{secret:...}}` against whatever the store currently holds, not whatever
+/// it held when the executor was constructed — otherwise a rotated or deleted
+/// secret keeps being sent (and, worse, is no longer in anyone's mask list).
+#[tokio::test]
+async fn set_secrets_changes_what_a_later_run_resolves() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(header(
+            "authorization",
+            // base64("alice:ROTATED")
+            "Basic YWxpY2U6Uk9UQVRFRA==",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "token-1",
+            "expires_in": 3600,
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/business"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let api = api(&server.uri(), CHAIN);
+    let mut ex = executor();
+    ex.set_secrets(Secrets::from_map([
+        ("GW_USER".into(), "alice".into()),
+        ("GW_PASS".into(), "ROTATED".into()),
+    ]));
+
+    // Succeeds only if the token request actually carried the rotated
+    // password — wiremock has no other mock for `/token`, so a stale
+    // credential would 404.
+    ex.run(&api, "business", Some("test")).await.unwrap();
+    assert_eq!(ex.static_values(), vec!["YWxpY2U6Uk9UQVRFRA==".to_string()]);
+}
+
+/// `preview` must perform NO network I/O — not even the auth request. The
+/// desktop app fires it automatically on selection and environment change, so
+/// resolving the chain there would POST to a production token endpoint because
+/// the user clicked around a sidebar, invisibly (design spec §7: never a black
+/// box).
+#[tokio::test]
+async fn preview_never_calls_the_token_endpoint() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "real-token-value",
+            "expires_in": 3600,
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let api = api(&server.uri(), CHAIN);
+    let mut ex = executor();
+    let req = ex.preview(&api, "business", Some("test")).await.unwrap();
+
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "a preview must not touch the network"
+    );
+    let auth = req
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        .map(|(_, v)| v.as_str())
+        .expect("the chained header is still rendered");
+    assert_eq!(auth, "Bearer <chained token from `token`>");
+    // Nothing was derived, so there is nothing to mask either.
+    assert!(ex.derived_values().is_empty());
+}
+
+/// A preview must not consult the token cache either: showing a real token when
+/// one happens to be cached and a placeholder otherwise would make the same
+/// endpoint display differently for no reason the user can see, and would put a
+/// live credential on screen for an action nobody asked for.
+#[tokio::test]
+async fn preview_shows_the_placeholder_even_when_a_token_is_cached() {
+    let server = MockServer::start().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(TokenIssuer {
+            calls: calls.clone(),
+            expires_in: 3600,
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/business"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let api = api(&server.uri(), CHAIN);
+    let mut ex = executor();
+    ex.run(&api, "business", Some("test")).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let req = ex.preview(&api, "business", Some("test")).await.unwrap();
+    let auth = req
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        .map(|(_, v)| v.as_str())
+        .unwrap();
+    assert_eq!(auth, "Bearer <chained token from `token`>");
+    assert!(
+        !auth.contains("token-1"),
+        "cached token leaked into a preview"
+    );
+}
+
+/// `prepare` keeps its chain-resolving behaviour — `copy as curl` depends on it
+/// to export a request that carries a real token (spec §8).
+#[tokio::test]
+async fn prepare_still_resolves_the_chain_for_the_curl_export() {
+    let server = MockServer::start().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(TokenIssuer {
+            calls: calls.clone(),
+            expires_in: 3600,
+        })
+        .mount(&server)
+        .await;
+
+    let api = api(&server.uri(), CHAIN);
+    let mut ex = executor();
+    let req = ex.prepare(&api, "business", Some("test")).await.unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the auth request is made");
+    let auth = req
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        .map(|(_, v)| v.as_str())
+        .unwrap();
+    assert_eq!(auth, "Bearer token-1");
+}
+
+/// The placeholder is exempt from `Authorization` credential redaction so a
+/// preview does not render as `Bearer ***` (indistinguishable from a fetched
+/// token). That exemption must not become a way to smuggle a real credential
+/// past the mask: it is applied AFTER the global substring mask, so a derived
+/// token shaped exactly like a placeholder is already `***` by then.
+#[test]
+fn a_derived_token_shaped_like_the_preview_placeholder_is_still_masked() {
+    use reqchain_core::model::Method;
+    use reqchain_core::request::EffectiveRequest;
+
+    let evil = "<chained token from `token`>".to_string();
+    let req = EffectiveRequest {
+        method: Method::Get,
+        url: "https://api.example.com/biz".into(),
+        headers: vec![("Authorization".into(), format!("Bearer {evil}"))],
+        body: None,
+    };
+    let masked = req.masked_with(std::slice::from_ref(&evil), &[]);
+    assert_eq!(
+        masked.headers[0].1, "Bearer ***",
+        "a real token in the mask list must still be redacted"
+    );
+}

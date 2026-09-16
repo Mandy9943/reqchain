@@ -1,6 +1,18 @@
 use crate::model::Method;
 use crate::request::{EffectiveBody, EffectiveRequest};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long to wait for a TCP/TLS connection before giving up. A host that is
+/// down or firewalled off usually manifests as a connect that never completes.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Ceiling on a whole request/response round trip. Without one, a server that
+/// accepts the connection and then goes silent hangs the caller forever — and
+/// in the desktop app the executor mutex is held for the whole round trip, so
+/// that one request would also freeze saving and every watcher-driven reload,
+/// with no cancel and no message. 30 s is long enough for a slow gateway and
+/// short enough that the UI recovers on its own.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecError {
@@ -49,8 +61,19 @@ impl Default for Runner {
 
 impl Runner {
     pub fn new() -> Runner {
+        Runner::with_timeouts(CONNECT_TIMEOUT, REQUEST_TIMEOUT)
+    }
+
+    /// A runner with explicit timeouts. [`Runner::new`] is this with
+    /// [`CONNECT_TIMEOUT`] and [`REQUEST_TIMEOUT`]; tests use short ones to
+    /// exercise the timeout path without waiting half a minute.
+    pub fn with_timeouts(connect: Duration, total: Duration) -> Runner {
         Runner {
-            client: reqwest::Client::builder().build().expect("client builds"),
+            client: reqwest::Client::builder()
+                .connect_timeout(connect)
+                .timeout(total)
+                .build()
+                .expect("client builds"),
         }
     }
 

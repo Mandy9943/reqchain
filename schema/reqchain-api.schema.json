@@ -37,6 +37,14 @@
       "$ref": "#/$defs/auth",
       "description": "The API-level auth, used by any endpoint whose own auth is `inherit`."
     },
+    "history": {
+      "type": "object",
+      "description": "Per-endpoint run history settings. Omit for the default (store bodies).",
+      "additionalProperties": false,
+      "properties": {
+        "storeBodies": { "type": "boolean", "default": true }
+      }
+    },
     "endpoints": {
       "type": "array",
       "description": "The HTTP endpoints this API exposes.",

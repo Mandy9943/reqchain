@@ -1,0 +1,243 @@
+// Shared UI state (Svelte 5 runes). This is the contract tasks 8-10 build
+// against — keep the exported names stable.
+import { listen } from "@tauri-apps/api/event";
+import {
+  loadWorkspace,
+  runEndpoint,
+  WORKSPACE_CHANGED_EVENT,
+  type ApiDto,
+  type EndpointDto,
+  type RunDto,
+  type WorkspaceDto,
+} from "./ipc";
+
+export const ui = $state({
+  workspace: { apis: [], errors: [] } as WorkspaceDto,
+  selected: null as { apiId: string; endpointId: string } | null,
+  // Set by reload() when `selected` pointed at an endpoint that no longer
+  // exists after a reload. Holds the last-known api/endpoint so the panel
+  // can keep showing it (marked removed) instead of going blank. Cleared
+  // whenever a fresh, still-valid selection is made (see `select`) or the
+  // endpoint reappears.
+  removedSelected: null as { api: ApiDto; endpoint: EndpointDto } | null,
+  env: {} as Record<string, string | null>, // apiId -> environment name
+  buffers: {} as Record<string, string>, // apiId -> unsaved editor text
+  // apiId -> true when the on-disk text changed (via hot reload) while the
+  // buffer for that api held unsaved edits. Cleared on discard or on a
+  // clean save. Never implies the buffer itself was touched — reload()
+  // never overwrites a dirty buffer.
+  diskChanged: {} as Record<string, boolean>,
+  search: "",
+  response: null as RunDto | null,
+  runError: null as string | null,
+  running: false,
+  error: null as string | null,
+});
+
+// Monotonic counter bumped on every selection change, so a `run_endpoint`
+// response that arrives after the user has moved on to a different
+// endpoint is dropped instead of being applied to the wrong selection —
+// same sequence-counter pattern used elsewhere (RequestPanel's lint/preview
+// calls) rather than a third mechanism.
+let runSeq = 0;
+
+/** Select an endpoint (or clear the selection), resetting reload-tracked flags. */
+export function select(
+  selection: { apiId: string; endpointId: string } | null,
+): void {
+  ui.selected = selection;
+  ui.removedSelected = null;
+  ui.response = null;
+  ui.runError = null;
+  runSeq++;
+}
+
+/**
+ * True while the current selection still resolves to a real endpoint in
+ * the workspace. False once a hot reload has marked it removed (see
+ * `ui.removedSelected`) — anything that would call the backend with these
+ * ids (`run_endpoint`, `curl_command`, `preview_endpoint`, `save_api`) must
+ * gate on this, not on `ui.selected` alone, since a removed endpoint's ids
+ * no longer resolve on the Rust side either.
+ */
+export function isSelectionLive(): boolean {
+  return selectedEndpoint() !== undefined;
+}
+
+/** True while a send can actually be triggered for the current selection. */
+export function canSendSelected(): boolean {
+  return isSelectionLive() && !ui.running;
+}
+
+/**
+ * Runs the selected endpoint, sharing one implementation (and one sequence
+ * counter) between the Send button and the Ctrl+Enter shortcut so the
+ * capture-before-await / stale-response-drop logic exists exactly once.
+ */
+export async function sendSelected(): Promise<void> {
+  if (!canSendSelected()) return;
+  const sel = ui.selected!;
+  // Capture everything the continuation needs off the reactive graph now —
+  // the selection can change while the request is in flight, and the
+  // response must never land against a different one.
+  const apiId = sel.apiId;
+  const endpointId = sel.endpointId;
+  const env = ui.env[apiId] ?? null;
+  const seq = runSeq;
+
+  ui.running = true;
+  ui.runError = null;
+  try {
+    const result = await runEndpoint(apiId, endpointId, env);
+    if (seq === runSeq) {
+      ui.response = result;
+      ui.runError = null;
+    }
+  } catch (e) {
+    if (seq === runSeq) {
+      ui.response = null;
+      ui.runError = e instanceof Error ? e.message : String(e);
+    }
+  } finally {
+    // Always release the lock — a stale response only skips *applying* its
+    // result, it must never leave Send permanently disabled.
+    ui.running = false;
+  }
+}
+
+/**
+ * Reloads the workspace from the backend, surfacing any failure via
+ * `ui.error`. Implements the hot-reload contract (spec §9):
+ *  - the selected endpoint survives; if it no longer resolves, it is kept
+ *    on screen via `ui.removedSelected` instead of being cleared;
+ *  - a dirty buffer is never overwritten — if its on-disk text changed
+ *    underneath it, `ui.diskChanged[apiId]` is set so the UI can offer
+ *    "discard mine"; a clean buffer is refreshed to the new on-disk text;
+ *  - `ui.response` is never touched here, so it survives.
+ */
+export async function reload(): Promise<void> {
+  try {
+    const previousApis = new Map(ui.workspace.apis.map((a) => [a.id, a]));
+    const prevSelectedApi = selectedApi();
+    const prevSelectedEndpoint = selectedEndpoint();
+
+    const workspace = await loadWorkspace();
+    ui.workspace = workspace;
+    ui.error = null;
+
+    // Default each API's environment selection to its first environment,
+    // without clobbering a choice the user already made — unless that
+    // choice no longer names a real environment (e.g. it was removed from
+    // the file), in which case it would otherwise linger as a value with no
+    // matching <option>.
+    for (const api of workspace.apis) {
+      const current = ui.env[api.id];
+      const stale =
+        current !== undefined &&
+        current !== null &&
+        !api.environments.includes(current);
+      if (current === undefined || stale) {
+        ui.env[api.id] = api.environments[0] ?? null;
+      }
+    }
+
+    // Selected endpoint survives, marked "removed" if it no longer resolves.
+    if (ui.selected) {
+      if (selectedEndpointIn(workspace, ui.selected)) {
+        ui.removedSelected = null;
+      } else if (prevSelectedApi && prevSelectedEndpoint) {
+        // Keep `ui.selected` and `ui.response` as they are — do not clear
+        // the panel — and remember the last-known api/endpoint to render.
+        ui.removedSelected = {
+          api: prevSelectedApi,
+          endpoint: prevSelectedEndpoint,
+        };
+      } else {
+        // The selection didn't resolve even before this reload (shouldn't
+        // normally happen) — nothing sensible to keep showing.
+        ui.selected = null;
+        ui.removedSelected = null;
+        ui.response = null;
+      }
+    }
+
+    // Buffers: never overwrite a dirty one. A clean buffer (matches the
+    // previously-known on-disk text) is refreshed to the new text so it
+    // keeps reflecting the file. A dirty one whose on-disk text changed
+    // underneath it is flagged via `diskChanged` instead of being touched.
+    for (const api of workspace.apis) {
+      const buffer = ui.buffers[api.id];
+      if (buffer === undefined) continue;
+      const prev = previousApis.get(api.id);
+      const prevText = prev?.text;
+      const wasDirtyBefore = prevText !== undefined && buffer !== prevText;
+      if (!wasDirtyBefore) {
+        // No local edits relative to the previously-known text — safe to
+        // just adopt the new on-disk text, no conflict to flag.
+        ui.buffers[api.id] = api.text;
+        ui.diskChanged[api.id] = false;
+      } else if (buffer === api.text) {
+        // The buffer's local edits happen to already match the new on-disk
+        // text (e.g. the same change was made both places) — no conflict.
+        ui.diskChanged[api.id] = false;
+      } else if (prevText !== api.text) {
+        // Buffer is dirty and the on-disk text actually moved underneath
+        // it — flag the conflict, but never touch the buffer itself.
+        ui.diskChanged[api.id] = true;
+      }
+    }
+  } catch (e) {
+    ui.error = e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Discards a dirty buffer's local edits, adopting the current on-disk text. */
+export function discardLocalChanges(apiId: string): void {
+  const api = ui.workspace.apis.find((a) => a.id === apiId);
+  if (!api) return;
+  ui.buffers[apiId] = api.text;
+  ui.diskChanged[apiId] = false;
+}
+
+function selectedEndpointIn(
+  workspace: WorkspaceDto,
+  selected: { apiId: string; endpointId: string },
+): boolean {
+  const api = workspace.apis.find((a) => a.id === selected.apiId);
+  return api?.endpoints.some((ep) => ep.id === selected.endpointId) ?? false;
+}
+
+export function selectedApi(): ApiDto | undefined {
+  if (!ui.selected) return undefined;
+  return ui.workspace.apis.find((a) => a.id === ui.selected!.apiId);
+}
+
+export function selectedEndpoint(): EndpointDto | undefined {
+  if (!ui.selected) return undefined;
+  return selectedApi()?.endpoints.find(
+    (ep) => ep.id === ui.selected!.endpointId,
+  );
+}
+
+/** `selectedApi()`, falling back to the last-known snapshot of a removed selection. */
+export function selectedApiOrRemoved(): ApiDto | undefined {
+  return selectedApi() ?? ui.removedSelected?.api;
+}
+
+/** `selectedEndpoint()`, falling back to the last-known snapshot of a removed selection. */
+export function selectedEndpointOrRemoved(): EndpointDto | undefined {
+  return selectedEndpoint() ?? ui.removedSelected?.endpoint;
+}
+
+// The backend has already reloaded its own state by the time this fires —
+// just re-invoke load_workspace.
+//
+// Deliberately module-scope with no unlisten: this is a singleton store for
+// a single-window app, so it lives exactly as long as the app does — there
+// is no component lifecycle to tear it down against, and no scenario where
+// it should stop listening while the window is open. Do not "fix" this into
+// a component-owned listener with an unlisten; that would just make it stop
+// working the moment whatever component registered it unmounts.
+listen(WORKSPACE_CHANGED_EVENT, () => {
+  void reload();
+});

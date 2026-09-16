@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions the reqchain window needs: the core defaults, plus clipboard WRITE only — 'copy as curl' puts text on the clipboard and the app never reads it back.",
+  "windows": ["main"],
+  "permissions": ["core:default", "clipboard-manager:allow-write-text"]
+}

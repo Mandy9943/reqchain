@@ -20,12 +20,23 @@ pub enum RunError {
     Chain { message: String },
 }
 
+/// Whether building an effective request may resolve a chained auth for real
+/// (performing the auth request) or must render it as a placeholder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChainMode {
+    /// Fetch the token, sending the auth request if it is not cached.
+    Resolve,
+    /// Render a placeholder; perform no I/O.
+    Placeholder,
+}
+
 pub struct Executor {
     runner: Runner,
     cache: TokenCache,
     secrets: Secrets,
     derived: Vec<String>,
     auth_headers: Vec<String>,
+    static_values: Vec<String>,
 }
 
 impl Executor {
@@ -36,11 +47,25 @@ impl Executor {
             secrets,
             derived: Vec::new(),
             auth_headers: Vec::new(),
+            static_values: Vec::new(),
         }
     }
 
     pub fn cache_mut(&mut self) -> &mut TokenCache {
         &mut self.cache
+    }
+
+    /// Replaces the secret store this executor resolves `{{secret:...}}`
+    /// against. Without this, an executor created once at startup keeps
+    /// interpolating a secret's value from the moment it was constructed —
+    /// after a rotation or deletion, it would keep sending the stale value
+    /// on the wire while only the NEW value is known to be sensitive
+    /// (present in a caller's mask), so the stale one would appear
+    /// unmasked in the effective request, the curl export and history.
+    /// Callers that hold a long-lived `Executor` (the desktop app's
+    /// `AppState`) must call this whenever the secret store is reloaded.
+    pub fn set_secrets(&mut self, secrets: Secrets) {
+        self.secrets = secrets;
     }
 
     /// Every token this executor has derived from an auth response. They are not
@@ -59,6 +84,18 @@ impl Executor {
         self.auth_headers.clone()
     }
 
+    /// Every literal value a *static* auth mechanism (basic, bearer, header,
+    /// computed) has set on a request so far — a Basic base64 blob, a fixed
+    /// bearer token, a computed header's value. These are not secrets or
+    /// chain-derived tokens, so they must never join the global REQUEST mask
+    /// (that would corrupt unrelated request output — see `auth_headers`);
+    /// but a server can echo one of them back in a response body or header,
+    /// so a caller building a RESPONSE-side mask (for the response body, its
+    /// headers, or history) should extend it with these.
+    pub fn static_values(&self) -> Vec<String> {
+        self.static_values.clone()
+    }
+
     fn remember(&mut self, value: &str) {
         if !value.is_empty() && !self.derived.iter().any(|v| v == value) {
             self.derived.push(value.to_string());
@@ -68,6 +105,12 @@ impl Executor {
     fn remember_auth_header(&mut self, name: &str) {
         if !name.is_empty() && !self.auth_headers.iter().any(|h| h == name) {
             self.auth_headers.push(name.to_string());
+        }
+    }
+
+    fn remember_static_value(&mut self, value: &str) {
+        if !value.is_empty() && !self.static_values.iter().any(|v| v == value) {
+            self.static_values.push(value.to_string());
         }
     }
 
@@ -109,8 +152,9 @@ impl Executor {
         })?;
         let scope = Scope::new(api, endpoint, env, &self.secrets);
         let mut req = request::build(api, endpoint, &scope)?;
-        for (header, _value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
+        for (header, value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
             self.remember_auth_header(&header);
+            self.remember_static_value(&value);
         }
 
         let resolved = auth::resolve(api, endpoint).clone();
@@ -168,25 +212,73 @@ impl Executor {
         Ok(res)
     }
 
+    /// The placeholder a [`Executor::preview`] renders in place of a chained
+    /// token it deliberately did not fetch. It names the source endpoint, so the
+    /// preview still says where the credential would come from — it is a
+    /// description of the chain, not a pretence that a token exists.
+    pub fn chained_token_placeholder(source_endpoint: &str) -> String {
+        format!(
+            "{}{source_endpoint}{}",
+            request::PLACEHOLDER_OPEN,
+            request::PLACEHOLDER_CLOSE
+        )
+    }
+
     /// Builds the effective request for `endpoint_id` exactly as [`Executor::run`]
     /// would — interpolating variables, applying static auth and resolving the auth
-    /// chain — but never sends it. Resolving a chain may still perform the AUTH
-    /// request: a chained token does not exist until its source endpoint has been
-    /// called, so it cannot be shown without one. The endpoint's OWN request is
-    /// never sent.
+    /// chain — but never sends the endpoint's OWN request.
+    ///
+    /// Resolving a chain may still perform the AUTH request: a chained token does
+    /// not exist until its source endpoint has been called. That makes this the
+    /// right call for an export the user explicitly asked for (`copy as curl`,
+    /// which must carry a real token) and the WRONG call for anything that runs on
+    /// its own — use [`Executor::preview`] there.
     pub async fn prepare(
         &mut self,
         api: &Api,
         endpoint_id: &str,
         env: Option<&str>,
     ) -> Result<EffectiveRequest, RunError> {
+        self.build_effective(api, endpoint_id, env, ChainMode::Resolve)
+            .await
+    }
+
+    /// Like [`Executor::prepare`], but guaranteed to perform NO network I/O at
+    /// all: variables are interpolated and static auth applied as usual, while a
+    /// chained auth's injected value is rendered as
+    /// [`Executor::chained_token_placeholder`] instead of being fetched.
+    ///
+    /// This exists because the desktop app previews the selected endpoint
+    /// automatically, on selection and on environment change. Resolving the chain
+    /// there would POST to a production token endpoint merely because the user
+    /// clicked around the sidebar — a live request the user never asked for, that
+    /// appears nowhere in the UI, which is the exact opposite of the design spec's
+    /// "never a black box" (§7).
+    pub async fn preview(
+        &mut self,
+        api: &Api,
+        endpoint_id: &str,
+        env: Option<&str>,
+    ) -> Result<EffectiveRequest, RunError> {
+        self.build_effective(api, endpoint_id, env, ChainMode::Placeholder)
+            .await
+    }
+
+    async fn build_effective(
+        &mut self,
+        api: &Api,
+        endpoint_id: &str,
+        env: Option<&str>,
+        mode: ChainMode,
+    ) -> Result<EffectiveRequest, RunError> {
         let endpoint = api.endpoint(endpoint_id).ok_or_else(|| RunError::Chain {
             message: format!("endpoint `{endpoint_id}` not found in API `{}`", api.id),
         })?;
         let scope = Scope::new(api, endpoint, env, &self.secrets);
         let mut req = request::build(api, endpoint, &scope)?;
-        for (header, _value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
+        for (header, value) in auth::apply_static(api, endpoint, &scope, &mut req)? {
             self.remember_auth_header(&header);
+            self.remember_static_value(&value);
         }
 
         let resolved = auth::resolve(api, endpoint).clone();
@@ -201,25 +293,56 @@ impl Executor {
             return Ok(req);
         };
 
-        let key = TokenCache::key(
-            &api.id,
-            &resolved,
-            &self.scope_fingerprint(api, &source.endpoint, env),
-        );
-        let mut visited = vec![endpoint_id.to_string()];
-        let (value, _trace) = self
-            .token(
-                api,
-                &source.endpoint,
-                env,
-                &extract,
-                &ttl,
-                &key,
-                &mut visited,
-            )
-            .await?;
+        let value = match mode {
+            // Never touches the network, and never consults the cache either: a
+            // preview that showed a real token when one happened to be cached and
+            // a placeholder otherwise would be an inconsistent, and occasionally
+            // credential-bearing, display of the same endpoint.
+            ChainMode::Placeholder => Executor::chained_token_placeholder(&source.endpoint),
+            ChainMode::Resolve => {
+                let key = TokenCache::key(
+                    &api.id,
+                    &resolved,
+                    &self.scope_fingerprint(api, &source.endpoint, env),
+                );
+                let mut visited = vec![endpoint_id.to_string()];
+                let (value, _trace) = self
+                    .token(
+                        api,
+                        &source.endpoint,
+                        env,
+                        &extract,
+                        &ttl,
+                        &key,
+                        &mut visited,
+                    )
+                    .await?;
+                value
+            }
+        };
         inject_value(&mut req, &inject, &value)?;
         Ok(req)
+    }
+
+    /// The token-cache key this executor would use for `endpoint_id`'s chained
+    /// auth, or `None` when that endpoint has no chained auth (nothing is
+    /// cached for it).
+    ///
+    /// Exists so a cache entry can be addressed from OUTSIDE the executor that
+    /// derived it. Today the desktop app's cache is in memory and always filled
+    /// by the same executor, which is the only reason masking survives a cache
+    /// hit: `token()` re-`remember`s the cached value, so it rejoins the mask
+    /// list. Persisting the cache (or sharing it between executors) would remove
+    /// that coincidence, so the behaviour is pinned by a test that fills the
+    /// cache with a token this executor never derived.
+    pub fn cache_key(&self, api: &Api, endpoint_id: &str, env: Option<&str>) -> Option<String> {
+        let endpoint = api.endpoint(endpoint_id)?;
+        let resolved = auth::resolve(api, endpoint).clone();
+        let Auth::Chained { source, .. } = &resolved else {
+            return None;
+        };
+        let fingerprint = self.scope_fingerprint(api, &source.endpoint, env);
+        Some(TokenCache::key(&api.id, &resolved, &fingerprint))
     }
 
     /// The part of a cache key that is not the auth *definition*: the active
