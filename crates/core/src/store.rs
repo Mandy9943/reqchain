@@ -1,6 +1,7 @@
 use crate::model::Api;
 use crate::paths::Paths;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct FileError {
@@ -12,6 +13,10 @@ pub struct FileError {
 pub struct Workspace {
     pub apis: Vec<Api>,
     pub errors: Vec<FileError>,
+    /// Maps an API's `id` to the file it was loaded from. Two files sharing an
+    /// `id` keep only the first-loaded path here (the collision is reported as
+    /// a `FileError`); both `Api` values still appear in `apis`.
+    sources: BTreeMap<String, PathBuf>,
 }
 
 impl Workspace {
@@ -45,7 +50,22 @@ impl Workspace {
                     message: e.to_string(),
                 }),
                 Ok(text) => match Api::from_json(&text) {
-                    Ok(api) => ws.apis.push(api),
+                    Ok(api) => {
+                        if let Some(existing) = ws.sources.get(&api.id) {
+                            ws.errors.push(FileError {
+                                path: path.clone(),
+                                message: format!(
+                                    "duplicate id `{}`: already loaded from {}, ignoring the copy in {}",
+                                    api.id,
+                                    existing.display(),
+                                    path.display()
+                                ),
+                            });
+                        } else {
+                            ws.sources.insert(api.id.clone(), path.clone());
+                        }
+                        ws.apis.push(api);
+                    }
                     Err(e) => ws.errors.push(FileError {
                         path,
                         message: e.to_string(),
@@ -58,5 +78,11 @@ impl Workspace {
 
     pub fn api(&self, id: &str) -> Option<&Api> {
         self.apis.iter().find(|a| a.id == id)
+    }
+
+    /// The file the API with this `id` was loaded from, if any. When two files
+    /// share an `id`, this points at the first one loaded (directory order).
+    pub fn path_of(&self, api_id: &str) -> Option<&Path> {
+        self.sources.get(api_id).map(PathBuf::as_path)
     }
 }

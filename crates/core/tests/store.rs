@@ -54,6 +54,47 @@ fn missing_workspace_is_empty_not_an_error() {
 }
 
 #[test]
+fn path_of_finds_the_file_an_api_was_loaded_from_even_with_a_mismatched_basename() {
+    let (_d, paths) = workspace_with(&[("gateway.json", GOOD)]);
+    let ws = Workspace::load(&paths);
+    let path = ws
+        .path_of("example-gateway-test")
+        .expect("path must be recorded");
+    assert!(path.ends_with("gateway.json"));
+}
+
+#[test]
+fn path_of_is_none_for_an_unknown_id() {
+    let (_d, paths) = workspace_with(&[("gateway.json", GOOD)]);
+    let ws = Workspace::load(&paths);
+    assert!(ws.path_of("nope").is_none());
+}
+
+#[test]
+fn duplicate_ids_keep_the_first_file_and_report_an_error_naming_both_paths() {
+    let (_d, paths) = workspace_with(&[("a.json", GOOD), ("b.json", GOOD)]);
+    let ws = Workspace::load(&paths);
+    // both files parse fine and share the same id; both are loaded as Api
+    // entries (nothing hidden), but the *source* mapping used for locating a
+    // file to save keeps only the first, and the collision is reported.
+    assert_eq!(ws.apis.len(), 2);
+    assert_eq!(ws.errors.len(), 1);
+    let err = &ws.errors[0];
+    assert!(
+        err.message.contains("example-gateway-test"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("a.json"), "{}", err.message);
+    assert!(err.message.contains("b.json"), "{}", err.message);
+    let path = ws.path_of("example-gateway-test").unwrap();
+    assert!(
+        path.ends_with("a.json"),
+        "must keep the first-loaded path: {path:?}"
+    );
+}
+
+#[test]
 fn an_unreadable_apis_directory_is_reported_not_swallowed() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("workspace")).unwrap();
