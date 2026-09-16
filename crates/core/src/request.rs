@@ -42,6 +42,10 @@ impl EffectiveRequest {
                     EffectiveBody::Text { content_type: content_type.clone(), content: mask(content) },
                 EffectiveBody::Form { fields } =>
                     EffectiveBody::Form { fields: fields.iter().map(|(k, v)| (k.clone(), mask(v))).collect() },
+                EffectiveBody::Multipart { fields, files } => EffectiveBody::Multipart {
+                    fields: fields.iter().map(|(k, v)| (k.clone(), mask(v))).collect(),
+                    files: files.clone(),
+                },
                 other => other.clone(),
             }),
         }
@@ -71,7 +75,8 @@ pub fn build(api: &Api, endpoint: &Endpoint, scope: &Scope) -> Result<EffectiveR
         None => None,
         Some(Body::Json { content }) => Some(EffectiveBody::Text {
             content_type: "application/json".into(),
-            content: scope.interpolate(&content.to_string())?,
+            content: serde_json::to_string(&interpolate_json(content, scope)?)
+                .expect("serde_json::Value always serializes"),
         }),
         Some(Body::Text { content }) => Some(EffectiveBody::Text {
             content_type: "text/plain".into(),
@@ -97,6 +102,29 @@ pub fn build(api: &Api, endpoint: &Endpoint, scope: &Scope) -> Result<EffectiveR
     };
 
     Ok(EffectiveRequest { method: endpoint.method, url, headers, body })
+}
+
+/// Interpolates `{{var}}` templates inside a JSON value tree, walking into string leaves
+/// (and object keys) only — numbers, booleans and null pass through untouched. This lets
+/// `serde_json` do the escaping, so an interpolated value can never break out of its string
+/// literal or inject sibling keys.
+fn interpolate_json(value: &serde_json::Value, scope: &Scope) -> Result<serde_json::Value, VarError> {
+    Ok(match value {
+        serde_json::Value::String(s) => serde_json::Value::String(scope.interpolate(s)?),
+        serde_json::Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items { out.push(interpolate_json(item, scope)?) }
+            serde_json::Value::Array(out)
+        }
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                out.insert(scope.interpolate(k)?, interpolate_json(v, scope)?);
+            }
+            serde_json::Value::Object(out)
+        }
+        other => other.clone(),
+    })
 }
 
 fn urlencode(s: &str) -> String {
