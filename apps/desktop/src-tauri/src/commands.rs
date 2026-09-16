@@ -197,7 +197,12 @@ pub async fn preview_endpoint_inner(
 ) -> Result<EffectiveDto, String> {
     let api = find_api(state, api_id)?;
     let mut executor = state.executor.lock().await;
-    let req = match executor.prepare(&api, endpoint_id, env.as_deref()).await {
+    // `preview`, never `prepare`. The frontend fires this by itself whenever the
+    // selection or the environment changes, so `prepare`'s chain resolution would
+    // POST to a real token endpoint just because the user clicked around the
+    // sidebar — a live request nobody asked for, invisible in the UI. `preview`
+    // renders the chained value as a placeholder and performs no I/O.
+    let req = match executor.preview(&api, endpoint_id, env.as_deref()).await {
         Ok(req) => req,
         Err(e) => return Err(redact_error(state, &executor, e)),
     };
@@ -216,6 +221,8 @@ pub async fn curl_command_inner(
 ) -> Result<String, String> {
     let api = find_api(state, api_id)?;
     let mut executor = state.executor.lock().await;
+    // `prepare`, not `preview`: a curl export is an explicit user action and must
+    // carry the real effective request, chain resolved (spec §8).
     let req = match executor.prepare(&api, endpoint_id, env.as_deref()).await {
         Ok(req) => req,
         Err(e) => return Err(redact_error(state, &executor, e)),

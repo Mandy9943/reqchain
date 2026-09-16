@@ -190,8 +190,66 @@ async fn a_secret_never_appears_unmasked_in_the_curl_command() {
     assert!(curl.contains("***"));
 }
 
+/// The frontend previews the selected endpoint on its own — on selection and on
+/// environment change — so a preview that resolved the chain would POST to a
+/// production token endpoint merely because the user clicked around the sidebar,
+/// and that request would appear nowhere in the UI. A preview must therefore
+/// touch the network ZERO times: not the business endpoint, not the auth one.
 #[tokio::test]
-async fn preview_endpoint_does_not_send_the_business_request() {
+async fn preview_endpoint_sends_no_request_at_all_not_even_the_auth_one() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "access_token": TOKEN, "expires_in": 3600 })),
+        )
+        .expect(0)
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/biz"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let (_d, state) = state_for(&mock.uri(), "");
+    let preview = commands::preview_endpoint_inner(&state, "demo", "biz", None)
+        .await
+        .unwrap();
+
+    assert_eq!(preview.method, "GET");
+    assert!(preview.url.ends_with("/biz"));
+
+    // The injected header is still SHOWN — the whole point of the product is that
+    // the chain is visible — but as a placeholder naming its source endpoint,
+    // never as a token that was silently fetched.
+    let authorization = preview
+        .headers
+        .iter()
+        .find(|[k, _]| k.eq_ignore_ascii_case("authorization"))
+        .map(|[_, v]| v.clone())
+        .expect("the chained header must still be rendered");
+    assert_eq!(authorization, "Bearer <chained token from `token`>");
+    assert!(
+        !authorization.contains(TOKEN),
+        "a preview must never carry a real token: {authorization}"
+    );
+
+    // `expect(0)` is only checked when the mock server is dropped; assert here
+    // too so the failure names the actual count.
+    assert_eq!(
+        mock.received_requests().await.unwrap().len(),
+        0,
+        "a preview must perform no I/O whatsoever"
+    );
+}
+
+/// The counterpart: `copy as curl` is an explicit user action, so it keeps
+/// resolving the chain for real and emits a runnable (masked) request.
+#[tokio::test]
+async fn curl_command_still_resolves_the_chain_for_real() {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
@@ -210,12 +268,18 @@ async fn preview_endpoint_does_not_send_the_business_request() {
         .await;
 
     let (_d, state) = state_for(&mock.uri(), "");
-    let preview = commands::preview_endpoint_inner(&state, "demo", "biz", None)
+    let curl = commands::curl_command_inner(&state, "demo", "biz", None)
         .await
         .unwrap();
 
-    assert_eq!(preview.method, "GET");
-    assert!(preview.url.ends_with("/biz"));
+    assert!(curl.contains("/biz"), "{curl}");
+    assert!(
+        !curl.contains("<chained token from"),
+        "curl must resolve the chain, not render the preview placeholder: {curl}"
+    );
+    // Resolved, and then masked before display (spec §5.3).
+    assert!(!curl.contains(TOKEN), "{curl}");
+    assert!(curl.contains("***"), "{curl}");
 }
 
 #[tokio::test]

@@ -15,6 +15,36 @@ pub const MIN_MASKABLE_LEN: usize = 6;
 /// The sentinel a redacted value is replaced with everywhere in this crate.
 pub const MASK_SENTINEL: &str = "***";
 
+/// Opening and closing of the placeholder a PREVIEW renders in place of a
+/// chained token it deliberately did not fetch
+/// (`crate::chain::Executor::chained_token_placeholder`).
+pub const PLACEHOLDER_OPEN: &str = "<chained token from `";
+pub const PLACEHOLDER_CLOSE: &str = "`>";
+
+/// True when `value` is exactly such a placeholder — a description of where a
+/// credential *would* come from, containing no credential at all.
+///
+/// This is the one value [`EffectiveRequest::masked_with`] leaves verbatim in an
+/// `Authorization` header, and it cannot be used to smuggle a real token past
+/// the mask: it is tested AFTER the global substring mask has run, and every
+/// token the executor derived is in that global list, so a real token shaped
+/// like a placeholder is already `***` by the time this is asked (pinned by
+/// `a_derived_token_shaped_like_the_preview_placeholder_is_still_masked`).
+pub fn is_placeholder(value: &str) -> bool {
+    value.len() > PLACEHOLDER_OPEN.len() + PLACEHOLDER_CLOSE.len()
+        && value.starts_with(PLACEHOLDER_OPEN)
+        && value.ends_with(PLACEHOLDER_CLOSE)
+}
+
+/// [`is_placeholder`] applied to the credential part of an `Authorization`
+/// value — `Bearer <chained token from \`token\`>` as well as a bare one.
+fn is_placeholder_credential(value: &str) -> bool {
+    match value.split_once(' ') {
+        Some((scheme, credential)) if !scheme.is_empty() => is_placeholder(credential),
+        _ => is_placeholder(value),
+    }
+}
+
 /// Replaces every occurrence of each `value` at least [`MIN_MASKABLE_LEN`] long
 /// with [`MASK_SENTINEL`]. Shared by [`EffectiveRequest::masked_with`] and
 /// `history::entry_from`, so there is exactly one place that decides what
@@ -125,10 +155,19 @@ impl EffectiveRequest {
                 .map(|(k, v)| {
                     let masked = mask(v);
                     if k.eq_ignore_ascii_case("authorization") {
-                        // Keep the scheme, hide the credential, whatever set it.
-                        (k.clone(), redact_credential(&masked))
+                        if is_placeholder_credential(&masked) {
+                            // Not a credential: a preview's description of the
+                            // chain it deliberately did not resolve. Hiding it
+                            // would render as `Bearer ***`, indistinguishable
+                            // from a token that WAS fetched — the confusion the
+                            // preview change exists to remove.
+                            (k.clone(), masked)
+                        } else {
+                            // Keep the scheme, hide the credential, whatever set it.
+                            (k.clone(), redact_credential(&masked))
+                        }
                     } else if is_auth_header(k) {
-                        (k.clone(), "***".to_string())
+                        (k.clone(), MASK_SENTINEL.to_string())
                     } else {
                         (k.clone(), masked)
                     }

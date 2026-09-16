@@ -122,12 +122,12 @@
     return () => clearTimeout(handle);
   });
 
-  // Effective URL preview. `preview_endpoint` only ever reads the
-  // *persisted* file, so its result cannot change from unsaved keystrokes —
-  // firing it on every valid-JSON edit would buy nothing and could spam a
-  // real chained-auth token endpoint with half-finished edits. So this only
-  // fires on: selection change, environment change for the selected API,
-  // and a successful save (via `previewGeneration`). Debounced 300 ms to
+  // Effective URL preview. `preview_endpoint` performs no network I/O at all
+  // (a chained auth renders as a placeholder — see `Executor::preview`) and
+  // only ever reads the *persisted* file, so its result cannot change from
+  // unsaved keystrokes; firing it on every valid-JSON edit would buy nothing.
+  // So this only fires on: selection change, environment change for the
+  // selected API, and a successful save (via `previewGeneration`). Debounced 300 ms to
   // coalesce rapid selection/environment changes; `previewSeq` drops a
   // response that's no longer for the current selection/environment.
   $effect(() => {
