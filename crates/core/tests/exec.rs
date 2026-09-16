@@ -1,7 +1,7 @@
 use reqchain_core::auth;
-use reqchain_core::exec::Runner;
-use reqchain_core::model::Api;
-use reqchain_core::request::{self, EffectiveBody};
+use reqchain_core::exec::{ExecError, Runner};
+use reqchain_core::model::{Api, Method};
+use reqchain_core::request::{self, EffectiveBody, EffectiveRequest};
 use reqchain_core::secrets::Secrets;
 use reqchain_core::shell;
 use reqchain_core::vars::Scope;
@@ -246,4 +246,40 @@ fn masked_redacts_secret_values_in_multipart_fields_but_not_file_paths() {
         }
         other => panic!("expected a Multipart body, got {other:?}"),
     }
+}
+
+/// A server that accepts the connection and then stalls must not hang the
+/// caller forever. In the desktop app the executor mutex is held across the
+/// whole round trip, so an unbounded wait here freezes Send, save and every
+/// watcher-driven reload at once.
+#[tokio::test]
+async fn a_stalled_response_fails_on_the_request_timeout_instead_of_hanging() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(30)))
+        .mount(&mock)
+        .await;
+
+    let runner = Runner::with_timeouts(
+        std::time::Duration::from_millis(500),
+        std::time::Duration::from_millis(200),
+    );
+    let req = EffectiveRequest {
+        method: Method::Get,
+        url: format!("{}/slow", mock.uri()),
+        headers: Vec::new(),
+        body: None,
+    };
+    let started = std::time::Instant::now();
+    let err = runner.send(&req).await.expect_err("must time out");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "must give up on the timeout, not wait for the server: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(err, ExecError::Transport(_)),
+        "a timeout is a transport failure: {err:?}"
+    );
 }
