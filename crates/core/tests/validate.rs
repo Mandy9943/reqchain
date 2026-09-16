@@ -70,6 +70,14 @@ fn every_diagnostic_carries_a_path() {
 }
 
 #[test]
+fn reports_a_chain_deeper_than_the_runtime_allows() {
+    let text = include_str!("../../../tests/fixtures/chain-too-deep.json")
+        .replace("BASE_URL", "https://example.test");
+    let msgs = errors(&validate_text(&text));
+    assert!(msgs.iter().any(|m| m.contains("deeper than")), "got: {msgs:?}");
+}
+
+#[test]
 fn reports_xpath_extraction_as_an_error_not_a_warning() {
     let bad = GOOD.replace(
         "\"extract\": {\n          \"from\": \"body\",\n          \"jsonPath\": \"$.access_token\"\n        },",
@@ -89,9 +97,19 @@ fn fixtures_satisfy_the_published_json_schema() {
     let schema: serde_json::Value =
         serde_json::from_str(include_str!("../../../schema/reqchain-api.schema.json")).unwrap();
     let validator = jsonschema::validator_for(&schema).expect("schema itself must be valid");
-    for fixture in [GOOD, include_str!("../../../tests/fixtures/precedence.json")] {
-        let instance: serde_json::Value = serde_json::from_str(fixture).unwrap();
+
+    let fixtures_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&fixtures_dir).expect("fixtures dir must exist") {
+        let path = entry.expect("readable dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("readable fixture");
+        let instance: serde_json::Value = serde_json::from_str(&text).unwrap();
         let errors: Vec<String> = validator.iter_errors(&instance).map(|e| e.to_string()).collect();
-        assert!(errors.is_empty(), "fixture violates schema: {errors:?}");
+        assert!(errors.is_empty(), "{} violates schema: {errors:?}", path.display());
+        checked += 1;
     }
+    assert!(checked >= 9, "expected at least 9 fixtures to be checked, found {checked}");
 }

@@ -267,7 +267,7 @@
             "retryOn": {
               "type": "array",
               "description": "HTTP status codes on which to refetch the token and retry once; defaults to [401, 403].",
-              "items": { "type": "integer", "description": "An HTTP status code that should trigger a token refresh and retry." }
+              "items": { "type": "integer", "minimum": 100, "maximum": 599, "description": "An HTTP status code that should trigger a token refresh and retry." }
             }
           }
         }
@@ -340,7 +340,7 @@
           "required": ["from", "seconds"],
           "properties": {
             "from": { "const": "fixed", "description": "Discriminator identifying this as a fixed ttl." },
-            "seconds": { "type": "integer", "description": "The number of seconds the token remains valid after being fetched." }
+            "seconds": { "type": "integer", "minimum": 0, "description": "The number of seconds the token remains valid after being fetched." }
           }
         },
         {

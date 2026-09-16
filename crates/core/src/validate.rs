@@ -191,7 +191,7 @@ fn check_cycles(api: &Api, out: &mut Vec<Diagnostic>) {
             path.push(source.endpoint.clone());
             let Some(next) = api.endpoint(&source.endpoint) else { break };
             current = next.clone();
-            if path.len() > crate::chain::MAX_DEPTH + 1 {
+            if path.len() > crate::chain::MAX_DEPTH {
                 out.push(Diagnostic::error(
                     "$.endpoints",
                     format!(

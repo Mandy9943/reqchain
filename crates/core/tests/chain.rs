@@ -1,4 +1,11 @@
-use reqchain_core::{cache::TokenCache, chain::Executor, exec::Runner, model::Api, secrets::Secrets};
+use reqchain_core::{
+    cache::TokenCache,
+    chain::Executor,
+    exec::Runner,
+    model::Api,
+    secrets::Secrets,
+    validate::{validate_api, Severity},
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use wiremock::matchers::{header, method, path, query_param};
@@ -333,4 +340,81 @@ async fn derived_tokens_are_exposed_so_the_caller_can_mask_them() {
     let mut ex = executor();
     ex.run(&api, "business", Some("test")).await.unwrap();
     assert_eq!(ex.derived_values(), vec!["token-1".to_string()]);
+}
+
+/// Cross-checks `validate::validate_api`'s depth guard against the runtime's:
+/// the two must agree exactly on where a chain becomes too deep. Uses
+/// `tests/fixtures/chain-too-deep.json`, a linear chain `a -> b -> c -> d -> e -> f`
+/// (6 endpoints). Starting from `b` walks only `b -> c -> d -> e -> f` (5
+/// endpoints, at the limit) and must be accepted by both. Starting from `a`
+/// walks all 6 and must be rejected by both.
+#[tokio::test]
+async fn a_five_level_chain_is_accepted_by_both_the_runtime_and_the_validator() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/f"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "tf", "expires_in": 3600,
+        })))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/e"))
+        .and(header("authorization", "Bearer tf"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "te", "expires_in": 3600,
+        })))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/d"))
+        .and(header("authorization", "Bearer te"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "td", "expires_in": 3600,
+        })))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/c"))
+        .and(header("authorization", "Bearer td"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "tc", "expires_in": 3600,
+        })))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/b"))
+        .and(header("authorization", "Bearer tc"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server).await;
+
+    let api = api(&server.uri(), include_str!("../../../tests/fixtures/chain-too-deep.json"));
+
+    let mut ex = executor();
+    let res = ex.run(&api, "b", Some("test")).await;
+    assert!(res.is_ok(), "the runtime must accept a 5-endpoint chain: {res:?}");
+
+    // The validator sees the whole file, including `a` (which makes the chain
+    // 6 deep). Drop `a` to isolate the exact same b..f sub-chain the runtime
+    // just walked, and confirm the validator raises no depth error for it.
+    let mut reduced = api.clone();
+    reduced.endpoints.retain(|e| e.id != "a");
+    let diags = validate_api(&reduced);
+    let depth_errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.severity == Severity::Error && d.message.contains("deeper than"))
+        .collect();
+    assert!(depth_errors.is_empty(), "validator must not flag a chain the runtime accepts: {depth_errors:?}");
+}
+
+#[tokio::test]
+async fn a_six_level_chain_is_rejected_by_both_the_runtime_and_the_validator() {
+    // No mocks are mounted: the runtime must fail on the depth guard before
+    // making any network call — the deepest hop (`f`) is never reached — so an
+    // empty mock server is the correct fixture; any accidental HTTP call would
+    // itself fail loudly and surface as a different, unexpected error.
+    let server = MockServer::start().await;
+    let api = api(&server.uri(), include_str!("../../../tests/fixtures/chain-too-deep.json"));
+
+    let mut ex = executor();
+    let err = ex.run(&api, "a", Some("test")).await.unwrap_err().to_string();
+    assert!(err.contains("deeper than 5 levels"), "got: {err}");
+
+    let diags = validate_api(&api);
+    let depth_errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.severity == Severity::Error && d.message.contains("deeper than"))
+        .collect();
+    assert!(!depth_errors.is_empty(), "validator must flag a chain the runtime rejects: {diags:?}");
 }
