@@ -10,6 +10,14 @@
     ui,
   } from "./state.svelte";
   import Editor from "./Editor.svelte";
+  import EndpointForm from "./form/EndpointForm.svelte";
+  import { parseApi } from "./model";
+
+  // Which of the two tabs is showing. Reset to "form" (the default) on every
+  // selection change, below — a user switching endpoints always lands back
+  // on the fields view, not wherever they last left the JSON tab for a
+  // *different* endpoint.
+  let activeTab = $state<"form" | "json">("form");
 
   let diagnostics = $state<DiagnosticDto[]>([]);
   let previewUrl = $state<string | null>(null);
@@ -56,6 +64,15 @@
     api !== undefined && ui.selected !== null && ui.selected.endpointId === null,
   );
   const bufferText = $derived(api ? ui.buffers[api.id] : undefined);
+  // Both tabs render from this buffer (never a second parse path) — see
+  // constraints.md's "one buffer" rule. Computed off `api`/`bufferText`
+  // (which already fall back to the removed-selection snapshot), not
+  // `currentDoc()`, so the parse check keeps working even in the rare case
+  // where the selected endpoint's API is no longer "live" (see the doc
+  // comment in EndpointForm.svelte for why that distinction matters there).
+  const parsedDoc = $derived(
+    api ? parseApi(bufferText ?? api.text) : undefined,
+  );
   const dirty = $derived(
     api !== undefined && bufferText !== undefined && bufferText !== api.text,
   );
@@ -107,6 +124,7 @@
     void ui.selected;
     saveError = null;
     diagnostics = [];
+    activeTab = "form";
   });
 
   // Diagnostics strip: relint on every buffer change, debounced. Guarded by
@@ -322,12 +340,60 @@
       {/if}
     </header>
 
-    <div class="editor-wrap">
-      <Editor
-        value={bufferText ?? api.text}
-        onChange={onEditorChange}
-        {diagnostics}
-      />
+    <div class="tab-strip" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "form"}
+        class="tab"
+        class:tab-active={activeTab === "form"}
+        onclick={() => (activeTab = "form")}
+      >
+        Form
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "json"}
+        class="tab"
+        class:tab-active={activeTab === "json"}
+        onclick={() => (activeTab = "json")}
+      >
+        JSON
+      </button>
+    </div>
+
+    <div class="tab-content">
+      {#if activeTab === "form"}
+        {#if !parsedDoc || !parsedDoc.ok}
+          <div class="parse-error">
+            <p>
+              {parsedDoc
+                ? parsedDoc.error
+                : "Nothing to edit — the selection no longer resolves."}
+            </p>
+            {#if parsedDoc}
+              <button
+                type="button"
+                class="switch-to-json"
+                onclick={() => (activeTab = "json")}
+              >
+                Switch to JSON
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <EndpointForm endpointId={endpoint.id} />
+        {/if}
+      {:else}
+        <div class="editor-wrap">
+          <Editor
+            value={bufferText ?? api.text}
+            onChange={onEditorChange}
+            {diagnostics}
+          />
+        </div>
+      {/if}
     </div>
 
     {#if diagnostics.length > 0}
@@ -480,8 +546,59 @@
     cursor: pointer;
   }
 
-  .editor-wrap {
+  .tab-strip {
+    flex-shrink: 0;
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .tab {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  .tab-active {
+    color: var(--color-text);
+    border-bottom-color: var(--color-accent);
+  }
+
+  .tab-content {
     flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .parse-error {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--color-error-text);
+    background: var(--color-error-bg);
+    border: 1px solid var(--color-error-text);
+    border-radius: 4px;
+  }
+
+  .switch-to-json {
+    align-self: flex-start;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    cursor: pointer;
+  }
+
+  .editor-wrap {
+    height: 100%;
     min-height: 0;
   }
 
