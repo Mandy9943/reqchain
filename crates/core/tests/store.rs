@@ -74,10 +74,13 @@ fn path_of_is_none_for_an_unknown_id() {
 fn duplicate_ids_keep_the_first_file_and_report_an_error_naming_both_paths() {
     let (_d, paths) = workspace_with(&[("a.json", GOOD), ("b.json", GOOD)]);
     let ws = Workspace::load(&paths);
-    // both files parse fine and share the same id; both are loaded as Api
-    // entries (nothing hidden), but the *source* mapping used for locating a
-    // file to save keeps only the first, and the collision is reported.
-    assert_eq!(ws.apis.len(), 2);
+    // Both files parse fine and share the same id. Only the FIRST is kept in
+    // `apis`: an id is the key every consumer addresses an API by (the source
+    // map, `api()`, `path_of()`, and the UI's keyed lists), so returning two
+    // entries under one key is never usable — it just breaks whoever assumes
+    // the id identifies one API. The copy is reported as a `FileError` and
+    // the rest of the workspace keeps working (design spec §9).
+    assert_eq!(ws.apis.len(), 1);
     assert_eq!(ws.errors.len(), 1);
     let err = &ws.errors[0];
     assert!(

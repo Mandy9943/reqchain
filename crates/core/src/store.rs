@@ -14,8 +14,11 @@ pub struct Workspace {
     pub apis: Vec<Api>,
     pub errors: Vec<FileError>,
     /// Maps an API's `id` to the file it was loaded from. Two files sharing an
-    /// `id` keep only the first-loaded path here (the collision is reported as
-    /// a `FileError`); both `Api` values still appear in `apis`.
+    /// `id` keep only the first-loaded one — both here and in `apis` — and the
+    /// copy is reported as a `FileError`. An id addresses exactly one API
+    /// everywhere else (`api()`, `path_of()`, the desktop DTO list and its
+    /// keyed rendering), so admitting a second entry under the same key would
+    /// only break those consumers.
     sources: BTreeMap<String, PathBuf>,
 }
 
@@ -63,8 +66,8 @@ impl Workspace {
                             });
                         } else {
                             ws.sources.insert(api.id.clone(), path.clone());
+                            ws.apis.push(api);
                         }
-                        ws.apis.push(api);
                     }
                     Err(e) => ws.errors.push(FileError {
                         path,
