@@ -1,6 +1,9 @@
-use crate::dto::{ApiDto, DiagnosticDto, FileErrorDto, WorkspaceDto};
+use crate::dto::{ApiDto, DiagnosticDto, EffectiveDto, FileErrorDto, RunDto, WorkspaceDto};
 use crate::state::AppState;
+use reqchain_core::chain::Executor;
+use reqchain_core::history::{self, HistoryEntry};
 use reqchain_core::model::Api;
+use reqchain_core::shell::to_shell_command;
 use reqchain_core::store::Workspace;
 use std::path::Path;
 
@@ -104,6 +107,132 @@ pub fn save_api_inner(
         .map_err(|e| format!("{}: {e}", path.display()))?;
     state.reload();
     Ok(diags)
+}
+
+fn find_api(state: &AppState, api_id: &str) -> Result<Api, String> {
+    state
+        .workspace
+        .lock()
+        .unwrap()
+        .api(api_id)
+        .cloned()
+        .ok_or_else(|| format!("API `{api_id}` not found"))
+}
+
+/// The mask every request/response string must pass through before leaving
+/// Rust: the executor's chain-derived tokens plus every secret value. See
+/// `dto::RunDto::from_result` and the masking contract in the task brief.
+fn mask_for(state: &AppState, executor: &Executor) -> Vec<String> {
+    let mut mask = executor.derived_values();
+    mask.extend(state.secrets.lock().unwrap().values().cloned());
+    mask
+}
+
+pub async fn run_endpoint_inner(
+    state: &AppState,
+    api_id: &str,
+    endpoint_id: &str,
+    env: Option<String>,
+) -> Result<RunDto, String> {
+    let api = find_api(state, api_id)?;
+    let mut executor = state.executor.lock().await;
+    let result = executor
+        .run(&api, endpoint_id, env.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mask = mask_for(state, &executor);
+    let auth_headers = executor.auth_headers();
+    let dto = RunDto::from_result(&result, &mask, &auth_headers);
+
+    let masked_effective = result.effective.masked_with(&mask, &auth_headers);
+    let store_bodies = api.history.as_ref().map(|h| h.store_bodies).unwrap_or(true);
+    let entry = history::entry_from(&result, &masked_effective, &mask, store_bodies);
+    // A failed history append is a non-fatal warning: it must never hide a
+    // response the user is about to see behind an error instead.
+    if let Err(e) = history::append(&state.paths, api_id, endpoint_id, &entry) {
+        eprintln!("warning: failed to append history for {api_id}/{endpoint_id}: {e}");
+    }
+
+    Ok(dto)
+}
+
+pub async fn preview_endpoint_inner(
+    state: &AppState,
+    api_id: &str,
+    endpoint_id: &str,
+    env: Option<String>,
+) -> Result<EffectiveDto, String> {
+    let api = find_api(state, api_id)?;
+    let mut executor = state.executor.lock().await;
+    let req = executor
+        .prepare(&api, endpoint_id, env.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    let mask = mask_for(state, &executor);
+    let auth_headers = executor.auth_headers();
+    Ok(EffectiveDto::from(&req.masked_with(&mask, &auth_headers)))
+}
+
+pub async fn curl_command_inner(
+    state: &AppState,
+    api_id: &str,
+    endpoint_id: &str,
+    env: Option<String>,
+) -> Result<String, String> {
+    let api = find_api(state, api_id)?;
+    let mut executor = state.executor.lock().await;
+    let req = executor
+        .prepare(&api, endpoint_id, env.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    let mask = mask_for(state, &executor);
+    let auth_headers = executor.auth_headers();
+    let masked = req.masked_with(&mask, &auth_headers);
+    Ok(to_shell_command(&masked))
+}
+
+pub fn history_inner(state: &AppState, api_id: &str, endpoint_id: &str) -> Vec<HistoryEntry> {
+    history::load(&state.paths, api_id, endpoint_id)
+}
+
+#[tauri::command]
+pub async fn run_endpoint(
+    state: tauri::State<'_, AppState>,
+    api_id: String,
+    endpoint_id: String,
+    env: Option<String>,
+) -> Result<RunDto, String> {
+    run_endpoint_inner(&state, &api_id, &endpoint_id, env).await
+}
+
+#[tauri::command]
+pub async fn preview_endpoint(
+    state: tauri::State<'_, AppState>,
+    api_id: String,
+    endpoint_id: String,
+    env: Option<String>,
+) -> Result<EffectiveDto, String> {
+    preview_endpoint_inner(&state, &api_id, &endpoint_id, env).await
+}
+
+#[tauri::command]
+pub async fn curl_command(
+    state: tauri::State<'_, AppState>,
+    api_id: String,
+    endpoint_id: String,
+    env: Option<String>,
+) -> Result<String, String> {
+    curl_command_inner(&state, &api_id, &endpoint_id, env).await
+}
+
+#[tauri::command]
+pub fn history(
+    state: tauri::State<AppState>,
+    api_id: String,
+    endpoint_id: String,
+) -> Vec<HistoryEntry> {
+    history_inner(&state, &api_id, &endpoint_id)
 }
 
 #[tauri::command]

@@ -19,7 +19,7 @@ pub const MASK_SENTINEL: &str = "***";
 /// with [`MASK_SENTINEL`]. Shared by [`EffectiveRequest::masked_with`] and
 /// `history::entry_from`, so there is exactly one place that decides what
 /// "redacted" means.
-pub(crate) fn redact(text: &str, values: &[String]) -> String {
+pub fn redact(text: &str, values: &[String]) -> String {
     let mut out = text.to_string();
     for v in values
         .iter()

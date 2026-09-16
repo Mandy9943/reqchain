@@ -10,7 +10,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::load_workspace,
             commands::lint,
-            commands::save_api
+            commands::save_api,
+            commands::run_endpoint,
+            commands::preview_endpoint,
+            commands::curl_command,
+            commands::history
         ])
         .run(tauri::generate_context!())
         .expect("error while running reqchain");

@@ -3204,6 +3204,7 @@ dependencies = [
  "tauri-build",
  "tempfile",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
