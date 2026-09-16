@@ -18,8 +18,10 @@ is what you should point an AI agent at when asking it to write an API file.
   automatically. Edition 2021.
 - **A C toolchain and linker.** On Debian/Ubuntu:
   ```sh
-  sudo apt install build-essential pkg-config libssl-dev
+  sudo apt install build-essential
   ```
+  Nothing else is needed: the HTTP stack uses rustls, not system OpenSSL, so there is no
+  `libssl-dev` or `pkg-config` dependency.
 
 ## Build
 
@@ -90,7 +92,7 @@ A missing store is not an error — a workspace with no secrets is valid — but
 references a secret the store does not define fails at run time.
 
 Secret values, and any token derived by chained auth, are masked as `***` in printed
-requests, auth traces and error messages.
+requests, in `--print-command` output and in error messages.
 
 ## Running the worked examples
 

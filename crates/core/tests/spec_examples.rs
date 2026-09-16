@@ -31,6 +31,31 @@ fn every_spec_example_validates() {
     }
 }
 
+/// Validating is not enough: the two worked examples must stay byte-identical to the
+/// fixtures they claim to reproduce, or SPEC.md silently drifts from the repository.
+#[test]
+fn spec_examples_match_their_fixtures() {
+    let fixtures = [
+        ("tests/fixtures/ceibal-gateway-test.json", include_str!("../../../tests/fixtures/ceibal-gateway-test.json")),
+        ("tests/fixtures/odilo.json", include_str!("../../../tests/fixtures/odilo.json")),
+    ];
+    let examples = spec_examples();
+    assert_eq!(
+        examples.len(),
+        fixtures.len(),
+        "SPEC.md has {} complete examples but {} fixtures are tracked here",
+        examples.len(),
+        fixtures.len()
+    );
+    for (example, (path, fixture)) in examples.iter().zip(fixtures) {
+        assert_eq!(
+            example.as_str(),
+            fixture.trim(),
+            "SPEC.md example has drifted from {path}"
+        );
+    }
+}
+
 #[test]
 fn the_odilo_fixture_validates() {
     let errors: Vec<_> = validate_text(include_str!("../../../tests/fixtures/odilo.json"))

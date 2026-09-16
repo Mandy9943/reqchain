@@ -13,7 +13,9 @@ obtained by calling another endpoint in the same file first.
 ## 2. Rules
 
 1. One API per file. A file contains exactly one top-level object, never an array.
-2. The file name must match the `id` field: `id: "odilo"` lives in `odilo.json`.
+2. Name the file after the `id` field: `id: "odilo"` lives in `odilo.json`. This is a
+   convention, not a checked rule — every `*.json` file in the directory is loaded and
+   indexed by its `id` field, and `validate` does not look at the file name.
 3. `schemaVersion` must be the integer `1`. Any other value is rejected at load time.
 4. Unknown fields are rejected everywhere. The format is closed: a typo in a field name
    is an error, not a silently ignored key.
@@ -297,8 +299,10 @@ The first scope that defines the name wins. Rules:
 - `{{secret:NAME}}` resolves **only** from the secret store at
   `$REQCHAIN_DIR/secrets.json`. It never falls back to a variable, and a variable named
   `secret:NAME` cannot shadow it. A missing secret is an error.
-- `{{value}}` is reserved: it is the token placeholder in a chained-auth `inject`
-  template, and is not resolved as a variable.
+- `{{value}}` is the token placeholder inside a chained-auth `inject` template **only**,
+  and is substituted there without going through variable lookup. Anywhere else it is an
+  ordinary variable reference: the validator accepts it, but the run fails unless a
+  variable named `value` is actually defined.
 - Whitespace inside the braces is trimmed: `{{ documento }}` and `{{documento}}` are the
   same reference.
 - An unterminated `{{` is left in the text verbatim rather than being treated as a
@@ -369,6 +373,9 @@ When an endpoint's resolved auth is `chained`, running it does this:
 5. Apply `ttl` to compute an expiry and cache the token. **If the expiry cannot be
    determined — the body is not JSON, the `jsonPath` matches nothing, or the matched value
    is not a number — the token is not cached at all** and is refetched on the next run.
+   A cached token is treated as expired **30 seconds before** its computed expiry, so that
+   a token does not go stale in flight. A `ttl` of 30 seconds or less therefore never
+   produces a cache hit; every run refetches.
 6. Inject the token into the original request per `inject` and send it.
 7. If the response status is in `retryOn` (default `[401, 403]`), invalidate the cache
    entry, fetch a fresh token and send the request **exactly once more**. The second
@@ -422,7 +429,8 @@ apis/gw.json: error: chained auth of `business` points at endpoint `nonexistent`
 What is an **error**: malformed JSON, an unknown field, a `schemaVersion` other than 1, a
 duplicate endpoint id, a reference to an undefined variable, an unknown function in a
 computed expression, a chained `source.endpoint` that does not exist, an invalid
-`jsonPath`, an `xpath` extract, an auth cycle, and a chain deeper than 5.
+`jsonPath` in `auth.extract` (a `ttl` jsonPath is only checked at run time), an `xpath`
+extract, an auth cycle, and a chain deeper than 5.
 
 What is a **warning**: relying on the default chained-auth `extract`, and relying on the
 default chained-auth `ttl`.
