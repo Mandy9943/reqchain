@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use reqchain_core::{
     cache::TokenCache,
-    chain::Executor,
-    exec::Runner,
+    chain::{Executor, RunError},
+    exec::{ExecError, Runner},
     paths::Paths,
     secrets::Secrets,
     shell,
@@ -127,22 +127,38 @@ async fn run(
 
     match executor.run(api, endpoint_id, env).await {
         Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(if e.to_string().contains("transport") { 2 } else { 1 })
+            // A chain error's message can legitimately embed up to 200 raw
+            // characters of the failing auth endpoint's response body — that is
+            // exactly where a leaked secret or a derived token would show up.
+            // Mask before printing, using every value we know is sensitive so
+            // far (literal secrets plus whatever the chain had already derived
+            // before it failed).
+            let mut mask_values = secret_values;
+            mask_values.extend(executor.derived_values());
+            eprintln!("error: {}", mask_all(&e.to_string(), &mask_values));
+
+            // Classify on the error variant, not on its rendered text: a chain
+            // failure can legitimately contain the word "transport" (e.g. an
+            // auth endpoint replying with a body like
+            // `{"error":"transport layer timeout"}`), which must not be
+            // reported as a transport failure.
+            let is_transport = matches!(e, RunError::Exec(ExecError::Transport(_)));
+            ExitCode::from(if is_transport { 2 } else { 1 })
         }
         Ok(res) => {
-            if let Err(e) = executor.cache_mut().save() {
-                eprintln!(
-                    "warning: could not save the token cache at {}: {e}",
-                    paths.cache_file().display()
-                );
-            }
-
             // The token derived by chained auth is itself a credential and must be
             // masked alongside the literal secrets from the store — it appears in
             // the effective request and in the auth trace.
             let mut mask_values = secret_values;
             mask_values.extend(executor.derived_values());
+
+            if let Err(e) = executor.cache_mut().save() {
+                eprintln!(
+                    "warning: could not save the token cache at {}: {}",
+                    paths.cache_file().display(),
+                    mask_all(&e.to_string(), &mask_values)
+                );
+            }
 
             let masked = res.effective.masked(&mask_values);
             if print_command {
@@ -165,4 +181,15 @@ async fn run(
             ExitCode::SUCCESS
         }
     }
+}
+
+/// Replaces every occurrence of any value in `mask` with `***`. Used to scrub
+/// secrets and chain-derived tokens out of text we did not otherwise get a
+/// chance to mask structurally, such as an error message.
+fn mask_all(text: &str, mask: &[String]) -> String {
+    let mut out = text.to_string();
+    for value in mask {
+        if !value.is_empty() { out = out.replace(value.as_str(), "***"); }
+    }
+    out
 }
