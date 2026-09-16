@@ -282,15 +282,16 @@ credentials supplied locally in `secrets.json`.
 
 ## 16. Amendments after phase 2
 
-**§11, request panel.** The spec describes the request panel as enumerated fields
-(method, path, headers, query, body, auth). The implementation is a single CodeMirror
-editor over the API's whole JSON file, plus a read-only summary header for the selected
-endpoint. This was a deliberate decision taken while planning phase 2, and it is ratified
-here rather than left as silent drift: the file is the model — an agent writes it, the
-watcher reloads it, `SPEC.md` documents it — and a field editor would need a second
-serializer that could disagree with `Api::to_json_string`, which is the one thing keeping
-the directory diff-clean. The summary header is what keeps the panel usable; the editor is
-what keeps it honest.
+**§11, request panel. WITHDRAWN — see §17.** Phase 2 replaced the enumerated fields with
+a single CodeMirror editor over the API's whole JSON file, and this section previously
+ratified that. The ratification was wrong and is withdrawn: §11 said fields, and §11 was
+right. The stated justification — that a field editor would need a second serializer
+capable of disagreeing with `Api::to_json_string` — does not survive examination. A form
+edits the typed model and saves through the same `save_api` command and the same
+serializer; and because the model is closed (`deny_unknown_fields`, a single
+`schemaVersion`), a form cannot silently drop a field it does not know about, because no
+such field can exist. The real defect was never technical: the JSON file is the
+interchange format an agent writes, not the interface a person operates.
 
 **§5.3, revealing secrets** and **§8, copy as curl.** Both are recorded as known gaps in
 `SPEC.md` under "Known gaps in the desktop app". A reveal path is phase 3 work; it opens a
@@ -300,3 +301,52 @@ hole in a masking boundary and deserves its own design, not a line in a fix roun
 resolves variables and static auth but renders a chained credential as a placeholder
 naming its source endpoint. Resolving a chain is a side effect on a real server, and it
 must follow from pressing Send — not from clicking around the sidebar.
+
+
+## 17. Visual editing (phase 2.5)
+
+Phase 2 shipped a window you can run requests from but not build them in: creating an API
+or an endpoint meant writing a file outside the app, and the only editing surface was raw
+JSON. That fails §11 and it fails the product — a user opening the app cold has no way in.
+
+**The forms are the interface; the JSON is the interchange format.** The request panel
+presents the model as fields, and the file is what an agent reads and writes.
+
+### 17.1 What is editable
+
+- **API**: name, `baseUrl`, variables, environments (add, remove, rename, and per-environment
+  variables), and the inherited `auth`.
+- **Endpoint**: method, path, headers and query as key/value rows, body (a type selector
+  with the editor that type needs — JSON, form, multipart, text, XML, binary), and `auth`.
+- **Auth**: a type selector with the fields that type requires. For `chained` this is a
+  guided builder, not a JSON blob: the source endpoint comes from a list of the API's own
+  endpoints, and extract, TTL, injection and `retryOn` are each presented as the choice
+  they are. This is the app's defining feature and it is the one that most needs not to be
+  hand-written.
+- **Structure**: create and delete APIs and endpoints.
+
+### 17.2 The JSON tab
+
+Every API keeps a secondary `JSON` tab holding the phase-2 editor, so the file an agent
+wrote can be read and hand-edited without leaving the window. Both surfaces edit one
+buffer and save through `save_api`; neither gets its own serializer.
+
+### 17.3 Secrets
+
+A secrets screen manages `{{secret:NAME}}` entries — create, replace, delete — so the app
+can be configured without a terminal.
+
+**It is write-only.** The screen lists names and whether each is set; it never sends a
+stored value back to the webview. A value can be overwritten but not read. This keeps the
+one property phase 2 spent an adversarial review establishing: no credential reaches the
+webview unmasked. Reading a secret back is the same decision as §5.3's deferred reveal,
+and it stays deferred.
+
+The file keeps mode 0600 and stays outside `workspace/`, exactly as §4 requires.
+
+### 17.4 What does not change
+
+Storage, the file format, `schemaVersion`, the masking boundary, the chained-auth engine
+and the CLI are untouched. This phase adds an editing surface over the model that already
+exists; if it requires a change to `reqchain-core`'s semantics, that is a sign the form is
+wrong, not the core.
