@@ -117,3 +117,34 @@ fn lint_reports_the_chained_default_warning() {
     let diags = commands::lint_inner(text);
     assert!(diags.iter().any(|d| d.severity == "warning"));
 }
+
+/// An endpoint with `"auth": "inherit"` (or no `auth` at all) under an API whose
+/// own auth is chained must report `chained`, so the sidebar shows the `chain`
+/// marker. Reporting the DECLARED auth here hid the marker on exactly the
+/// endpoints the product exists to make visible.
+#[tokio::test]
+async fn an_endpoint_inheriting_a_chained_api_auth_reports_chained() {
+    let text = r#"{"schemaVersion":1,"id":"demo","name":"Demo",
+      "baseUrl":"https://api.example.com",
+      "auth":{"type":"chained","source":{"endpoint":"token"},
+        "inject":{"into":"header","name":"Authorization","template":"Bearer {{value}}"}},
+      "endpoints":[
+        {"id":"token","name":"Token","method":"POST","path":"/token","auth":{"type":"none"}},
+        {"id":"inherits","name":"Inherits","method":"GET","path":"/biz"},
+        {"id":"explicit","name":"Explicit","method":"GET","path":"/open","auth":{"type":"none"}}]}"#;
+    let (_d, state) = state_with("demo.json", text);
+    let ws = commands::load_workspace_inner(&state).await;
+    let endpoints = &ws.apis[0].endpoints;
+
+    let kind = |id: &str| {
+        endpoints
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap_or_else(|| panic!("no endpoint {id}"))
+            .auth_kind
+            .clone()
+    };
+    assert_eq!(kind("inherits"), "chained", "the marker must be shown");
+    assert_eq!(kind("token"), "none");
+    assert_eq!(kind("explicit"), "none", "an explicit override still wins");
+}

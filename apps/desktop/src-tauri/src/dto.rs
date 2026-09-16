@@ -81,14 +81,22 @@ fn auth_kind(auth: &reqchain_core::model::Auth) -> &'static str {
     }
 }
 
-impl From<&reqchain_core::model::Endpoint> for EndpointDto {
-    fn from(ep: &reqchain_core::model::Endpoint) -> EndpointDto {
+impl EndpointDto {
+    /// `auth_kind` reports the auth that will actually be USED, not the one the
+    /// endpoint declares: `auth::resolve` folds `inherit` into the API-level
+    /// auth. An endpoint that inherits a chained API auth would otherwise report
+    /// `inherit` and get no `chain` marker in the sidebar — and that marker is
+    /// the one signal this whole product exists to surface.
+    pub fn from_endpoint(
+        api: &reqchain_core::model::Api,
+        ep: &reqchain_core::model::Endpoint,
+    ) -> EndpointDto {
         EndpointDto {
             id: ep.id.clone(),
             name: ep.name.clone(),
             method: ep.method.as_str().to_string(),
             path: ep.path.clone(),
-            auth_kind: auth_kind(&ep.auth).to_string(),
+            auth_kind: auth_kind(reqchain_core::auth::resolve(api, ep)).to_string(),
         }
     }
 }
@@ -270,7 +278,11 @@ impl ApiDto {
             name: api.name.clone(),
             base_url: api.base_url.clone(),
             environments: api.environments.iter().map(|e| e.name.clone()).collect(),
-            endpoints: api.endpoints.iter().map(Into::into).collect(),
+            endpoints: api
+                .endpoints
+                .iter()
+                .map(|ep| EndpointDto::from_endpoint(api, ep))
+                .collect(),
             text,
         }
     }
