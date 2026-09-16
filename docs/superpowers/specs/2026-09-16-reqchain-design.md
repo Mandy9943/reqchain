@@ -333,16 +333,33 @@ buffer and save through `save_api`; neither gets its own serializer.
 
 ### 17.3 Secrets
 
-A secrets screen manages `{{secret:NAME}}` entries — create, replace, delete — so the app
-can be configured without a terminal.
+A secrets screen manages `{{secret:NAME}}` entries — create, replace, delete, and **read**
+— so the app can be configured and debugged without a terminal.
 
-**It is write-only.** The screen lists names and whether each is set; it never sends a
-stored value back to the webview. A value can be overwritten but not read. This keeps the
-one property phase 2 spent an adversarial review establishing: no credential reaches the
-webview unmasked. Reading a secret back is the same decision as §5.3's deferred reveal,
-and it stays deferred.
+Values are readable. An earlier draft of this section made the screen write-only; that was
+wrong. `secrets.json` is a plaintext file in the user's own home directory that they can
+open in any editor, so refusing to show a value inside the app protects nothing and
+removes the answer to the question the screen exists for: a request failed with 401 — is
+the credential I stored the one I think it is?
+
+The risk worth designing against is not the disk, it is the screen: a shared display, a
+screenshot, someone walking past. So:
+
+- Every value renders masked by default.
+- Revealing is explicit, one entry at a time, and never sticky: a revealed value re-masks
+  when the screen is left.
+- The reveal exists ONLY on the secrets screen. Everywhere a credential could otherwise
+  end up — the effective request, the auth trace, the response, run history on disk, error
+  text — stays masked unconditionally. Those are the paths a phase-2 adversarial review
+  closed one at a time, and this section does not reopen any of them.
 
 The file keeps mode 0600 and stays outside `workspace/`, exactly as §4 requires.
+
+This also supersedes §5.3's blanket "masked unless the user explicitly reveals them" being
+listed as unbuilt: the reveal now exists for stored secrets. It is still NOT built for the
+`copy as curl` export, which continues to emit `***` — that is a separate surface (text
+leaving the app, headed for a clipboard and probably a terminal history) and it gets its
+own decision rather than inheriting this one.
 
 ### 17.4 What does not change
 
