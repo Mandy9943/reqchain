@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "id": "auth-static",
+  "name": "Auth Static",
+  "baseUrl": "https://example.test",
+  "variables": {},
+  "environments": [
+    {
+      "name": "test",
+      "variables": {
+        "documento": "12345678"
+      }
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "token": "api-level"
+  },
+  "endpoints": [
+    {
+      "id": "basic",
+      "name": "Basic",
+      "method": "GET",
+      "path": "/x",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "basic",
+        "username": "{{secret:GW_USER}}",
+        "password": "{{secret:GW_PASS}}"
+      }
+    },
+    {
+      "id": "bearer",
+      "name": "Bearer",
+      "method": "GET",
+      "path": "/x",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "bearer",
+        "token": "static-token"
+      }
+    },
+    {
+      "id": "custom",
+      "name": "Custom",
+      "method": "GET",
+      "path": "/x",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "header",
+        "headers": {
+          "x-api-key": "abc123",
+          "x-user": "{{documento}}"
+        }
+      }
+    },
+    {
+      "id": "inheriting",
+      "name": "Inheriting",
+      "method": "GET",
+      "path": "/x",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "inherit"
+      }
+    },
+    {
+      "id": "opted-out",
+      "name": "Opted Out",
+      "method": "GET",
+      "path": "/x",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "chained",
+      "name": "Chained",
+      "method": "GET",
+      "path": "/x",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "bearer"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
+        }
+      }
+    }
+  ]
+}

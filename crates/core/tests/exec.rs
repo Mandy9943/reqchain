@@ -2,7 +2,9 @@ use reqchain_core::exec::Runner;
 use reqchain_core::model::Api;
 use reqchain_core::request::{self, EffectiveBody};
 use reqchain_core::secrets::Secrets;
+use reqchain_core::shell;
 use reqchain_core::vars::Scope;
+use reqchain_core::auth;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -60,6 +62,47 @@ async fn sends_interpolated_json_body_and_reports_metrics() {
     assert_eq!(res.status, 200);
     assert!(res.size_bytes > 0);
     assert!(res.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")));
+}
+
+#[tokio::test]
+async fn computed_header_is_evaluated() {
+    let today = chrono::Local::now().format("%Y%m%d");
+    let expected = format!("{:x}", md5_simple::compute(format!("{today}12345678").as_bytes()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/odilo/user"))
+        .and(header("user", "12345678"))
+        .and(header("hash", expected.as_str()))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let api = api_with_base(&server.uri());
+    let ep = api.endpoint("odilo").unwrap();
+    let secrets = Secrets::from_map([("API_TOKEN".into(), "t0k".into())]);
+    let scope = Scope::new(&api, ep, Some("test"), &secrets);
+    let mut req = request::build(&api, ep, &scope).unwrap();
+    auth::apply_static(&api, ep, &scope, &mut req).unwrap();
+
+    let res = Runner::new().send(&req).await.unwrap();
+    assert_eq!(res.status, 200);
+}
+
+#[test]
+fn shell_export_masks_secret_values() {
+    let text = include_str!("../../../tests/fixtures/exec.json").replace("BASE_URL", "https://example.test");
+    let api = Api::from_json(&text).unwrap();
+    let ep = api.endpoint("odilo").unwrap();
+    let secrets = Secrets::from_map([("API_TOKEN".into(), "sup3rsecret".into())]);
+    let scope = Scope::new(&api, ep, Some("test"), &secrets);
+    let mut req = request::build(&api, ep, &scope).unwrap();
+    auth::apply_static(&api, ep, &scope, &mut req).unwrap();
+
+    let command = shell::to_shell_command(&req.masked(&scope.secret_values()));
+    assert!(command.starts_with("curl "));
+    assert!(!command.contains("sup3rsecret"));
+    assert!(command.contains("***"));
 }
 
 fn effective_json_body(req: &request::EffectiveRequest) -> &str {

@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod exec;
 pub mod expr;
 pub mod model;
