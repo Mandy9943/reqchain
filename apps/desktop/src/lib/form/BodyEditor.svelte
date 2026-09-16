@@ -44,13 +44,40 @@
   // below), so this is the only place that error is visible.
   let jsonParseError = $state<string | null>(null);
 
+  // The `json` sub-editor's OWN text, separate from `body.content`. This is
+  // the fix for a real bug: `body.content` is a parsed JS value, and
+  // `jsonContentText(body.content)` re-stringifies it canonically — that
+  // re-stringified text is almost never byte-identical to what the user
+  // actually typed (different indentation, key order preserved but
+  // whitespace normalized, ...). If `Editor`'s `value` prop were fed
+  // straight from `jsonContentText(body.content)`, then every keystroke
+  // that keeps the JSON valid would: commit -> `body.content` changes ->
+  // `jsonContentText` produces DIFFERENT text than what's in the widget ->
+  // `Editor.svelte`'s echo-vs-external effect sees `external !== lastKnown`
+  // -> replaces the whole document and resets the caret to position 0. That
+  // is not a rare edge case — it is every valid keystroke while editing an
+  // existing json body.
+  //
+  // The fix: `jsonText` IS what's fed to `Editor`'s `value` prop, and it is
+  // updated ONLY in two places — (1) on every `onJsonInput` call, from the
+  // exact text `Editor` reports (so our own echo is a no-op: `Editor`
+  // already holds that exact text as its own `lastKnown`), and (2) inside
+  // the `lastBodyKey`-guarded effect below, which only fires when `body`
+  // changed from OUTSIDE this component (a different endpoint, a hot
+  // reload, an edit via the JSON tab) — exactly the cases where re-deriving
+  // fresh text from `body.content` and resetting the caret is correct.
+  let jsonText = $state<string>(
+    untrack(() => jsonContentText(body?.type === "json" ? body.content : undefined)),
+  );
+
   // `lastBodyKey` distinguishes "the document changed under us" (a
   // different endpoint selected, or an edit made in the JSON tab) from "this
   // is just the echo of the change this component itself just committed" —
   // same pattern `Editor.svelte`/`KeyValueRows.svelte` use for their own
   // state. `EndpointForm`/`RequestPanel` reuse this same component instance
   // across an endpoint switch (no `{#key}`), so without this, leftover
-  // `pendingType`/`jsonParseError` from a previous endpoint could linger.
+  // `pendingType`/`jsonParseError`/`jsonText` from a previous endpoint could
+  // linger.
   let lastBodyKey: string = untrack(() => bodyKey(body));
 
   $effect(() => {
@@ -59,6 +86,11 @@
       lastBodyKey = key;
       pendingType = null;
       jsonParseError = null;
+      // A genuine external change — re-derive display text from the new
+      // content. Harmless (and necessary) even for a non-json body: it
+      // keeps `jsonText` in sync so switching back to a json body later
+      // doesn't show stale text from a previous endpoint.
+      jsonText = jsonContentText(body?.type === "json" ? body.content : undefined);
     }
   });
 
@@ -75,7 +107,7 @@
     }
     if (isBodyEmpty(body)) {
       pendingType = null;
-      commit(defaultBodyForType(value));
+      applyTypeSwitch(value);
     } else {
       pendingType = value;
     }
@@ -83,8 +115,23 @@
 
   function confirmTypeChange(): void {
     if (pendingType === null) return;
-    const next = defaultBodyForType(pendingType);
+    const target = pendingType;
     pendingType = null;
+    applyTypeSwitch(target);
+  }
+
+  /** Applies a (confirmed, or no-confirmation-needed) switch to a fresh
+   * empty body of `type`. Also resets `jsonText` when the target is
+   * `"json"` — this is a deliberate, user-initiated content change (a
+   * brand-new empty body), not an edit inside the json sub-editor, so there
+   * is no "text the user typed" to preserve; without this, switching away
+   * from and back to json could show stale text left over from a body this
+   * endpoint had before. */
+  function applyTypeSwitch(type: BodyType): void {
+    const next = defaultBodyForType(type);
+    if (next?.type === "json") {
+      jsonText = jsonContentText(next.content);
+    }
     commit(next);
   }
 
@@ -93,6 +140,13 @@
   }
 
   function onJsonInput(text: string): void {
+    // The user's own text is the source of truth for what the widget shows
+    // — recorded unconditionally, whether or not it currently parses. This
+    // is what makes our own commit below an echo no-op: `Editor` already
+    // holds exactly `text` as its `lastKnown`, and we're about to feed it
+    // back the SAME string via `jsonText`, not a re-stringified one, so its
+    // external-change effect sees no difference and never resets the caret.
+    jsonText = text;
     const result = parseJsonContent(text);
     if (result.ok) {
       jsonParseError = null;
@@ -168,10 +222,7 @@
     <p class="hint">No request body.</p>
   {:else if currentType === "json"}
     <div class="sub-editor">
-      <Editor
-        value={jsonContentText(body?.type === "json" ? body.content : undefined)}
-        onChange={onJsonInput}
-      />
+      <Editor value={jsonText} onChange={onJsonInput} />
     </div>
     {#if jsonParseError}
       <p class="field-error" role="alert">Invalid JSON: {jsonParseError}</p>

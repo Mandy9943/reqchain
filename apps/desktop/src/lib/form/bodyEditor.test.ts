@@ -199,6 +199,30 @@ describe("jsonContentText / parseJsonContent", () => {
   it("a blank editor is a parse error, not empty-object content", () => {
     expect(parseJsonContent("").ok).toBe(false);
   });
+
+  it("re-stringified content is not always identical to the text that produced it", () => {
+    // This is the root cause of the "cursor jumps to the start on every
+    // keystroke" bug: `jsonContentText(parseJsonContent(text).content)` is a
+    // canonical re-render, not the original input. A component that feeds
+    // an editor widget `jsonContentText(content)` as its committed-value
+    // source of truth (instead of tracking the exact text it last accepted)
+    // will see this text differ from what the widget still holds after
+    // every keystroke that happens to stay valid, and reset the widget.
+    const typed = '{\n  "a": 1,\n\n\n  "b": 2\n}'; // valid JSON, unusual whitespace
+    const parsed = parseJsonContent(typed);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const reformatted = jsonContentText(parsed.content);
+    expect(reformatted).not.toBe(typed);
+  });
+
+  it("round-trips back to the same text once already canonically formatted (no infinite drift)", () => {
+    const canonical = jsonContentText({ a: 1, b: 2 });
+    const parsed = parseJsonContent(canonical);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(jsonContentText(parsed.content)).toBe(canonical);
+  });
 });
 
 describe("bodyStringField", () => {
