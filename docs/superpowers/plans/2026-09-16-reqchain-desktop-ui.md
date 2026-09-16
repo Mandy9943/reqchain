@@ -1045,6 +1045,8 @@ let shown = req.masked_with(&mask, &executor.auth_headers());
 
 and every auth-step `body` and the response `body` are additionally passed through a string-level redaction of the same `mask` list. An auth response body contains the token verbatim; showing it raw would defeat every other mask in the app.
 
+The same `mask` list is what `history::entry_from(result, masked, &mask, store_bodies)` takes as its third argument (Task 1 fix round) — history is written to disk, so the redaction there is not optional.
+
 - [ ] **Step 1: Write the failing tests**
 
 The first test is written out in full; the remaining seven follow its shape — same
