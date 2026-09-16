@@ -190,7 +190,13 @@ form concatenated with `person_id`. The `token` and `user` headers are ordinary 
 | `variables` | object of string to string | no (default `{}`) | API-level variables. Lowest precedence. |
 | `environments` | array of Environment | no (default `[]`) | Named variable-override sets. |
 | `auth` | Auth | no (default `{"type": "none"}`) | Used by any endpoint whose own auth is `inherit`. |
+| `history` | HistoryConfig | no (default `{"storeBodies": true}`) | Per-endpoint run history settings. |
 | `endpoints` | array of Endpoint | yes | The endpoints. Ids must be unique; a duplicate is an error. |
+
+`history.storeBodies` defaults to `true`; set it to `false` on an API whose requests or
+responses carry personal data — run metadata (status, time, size, method, url) is still
+recorded, bodies are not. History lives in `~/.config/reqchain/history/<api>/<endpoint>.jsonl`
+and is never part of the versioned workspace.
 
 ### Environment
 

@@ -3,6 +3,7 @@ pub mod cache;
 pub mod chain;
 pub mod exec;
 pub mod expr;
+pub mod history;
 pub mod model;
 pub mod paths;
 pub mod request;
