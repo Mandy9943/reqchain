@@ -72,6 +72,8 @@ export interface RunDto {
   headers: [string, string][];
   body: string;
   bodyIsBinary: boolean;
+  /** `body` holds only the first slice of a very large response. */
+  bodyTruncated: boolean;
   effective: EffectiveDto;
   authTrace: AuthStepDto[];
 }

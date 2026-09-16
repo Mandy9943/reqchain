@@ -8,6 +8,7 @@
   // system clipboard directly.
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { curlCommand, type AuthStepDto } from "./ipc";
+  import { detectBodyKind, prettyPrint, type BodyKind } from "./pretty";
   import {
     canSendSelected,
     isSelectionLive,
@@ -36,23 +37,20 @@
     copyError = null;
   });
 
-  const parsedBody = $derived.by(() => {
-    if (!response || response.bodyIsBinary) return undefined;
-    try {
-      return JSON.parse(response.body) as unknown;
-    } catch {
-      return undefined;
-    }
+  // Spec §8 asks for pretty-print on JSON, XML, HTML and plain text. The kind
+  // comes from the Content-Type first and the body's own shape second, so a
+  // server that sends XML as `text/plain` still gets indented.
+  const bodyKind = $derived.by(() => {
+    if (!response || response.bodyIsBinary) return "text" as BodyKind;
+    return detectBodyKind(contentType(response.headers), response.body);
   });
 
-  const bodyIsJson = $derived(parsedBody !== undefined);
+  const canPrettyPrint = $derived(bodyKind !== "text");
 
   const displayedBody = $derived.by(() => {
     if (!response || response.bodyIsBinary) return "";
-    if (bodyIsJson && prettyBody) {
-      return JSON.stringify(parsedBody, null, 2);
-    }
-    return response.body;
+    if (!prettyBody || !canPrettyPrint) return response.body;
+    return prettyPrint(response.body, bodyKind);
   });
 
   const bodySegments = $derived.by(() => {
@@ -233,7 +231,7 @@
           </p>
         {:else}
           <div class="body-controls">
-            {#if bodyIsJson}
+            {#if canPrettyPrint}
               <button type="button" onclick={() => (prettyBody = !prettyBody)}>
                 {prettyBody ? "Raw" : "Pretty"}
               </button>
@@ -246,6 +244,11 @@
               bind:value={findQuery}
             />
           </div>
+          {#if response.bodyTruncated}
+            <p class="truncated-note">
+              Showing the first 1 MB of a {formatSize(response.sizeBytes)} response.
+            </p>
+          {/if}
           <pre class="body-text">{#each bodySegments as seg, i (i)}{#if seg.match}<mark
                   >{seg.text}</mark
                 >{:else}{seg.text}{/if}{/each}</pre>
@@ -292,10 +295,13 @@
               <details class="auth-step" open>
                 <summary>
                   <span class="auth-endpoint">{step.endpointId}</span>
+                  <!-- A cache hit has no HTTP status to show, so the badge IS
+                       the status. Rendering both said "from cache" twice. -->
                   {#if step.fromCache}
                     <span class="badge badge-cache">from cache</span>
+                  {:else}
+                    <span class="auth-status">{authStatusLabel(step)}</span>
                   {/if}
-                  <span class="auth-status">{authStatusLabel(step)}</span>
                 </summary>
                 <div class="auth-step-body">
                   <h4>Request</h4>
@@ -409,6 +415,13 @@
   }
 
   .run-error,
+  .truncated-note {
+    margin: 0 0 0.4rem;
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    font-style: italic;
+  }
+
   .copy-error {
     font-size: 0.8rem;
     color: var(--color-error-text);

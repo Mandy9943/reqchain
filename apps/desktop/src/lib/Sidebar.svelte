@@ -85,6 +85,17 @@
         </ul>
       </section>
     {/each}
+
+    {#if ui.workspace.apis.length === 0}
+      <!-- A fresh install has no workspace files, and a bare empty panel
+           gives no clue where they are meant to go. -->
+      <p class="empty-state">
+        No APIs yet. Drop a JSON file into
+        <code>~/.config/reqchain/workspace/apis/</code> — the app picks it up
+        as soon as it is saved. <code>SPEC.md</code> describes the format, and
+        <code>reqchain validate &lt;file&gt;</code> checks one.
+      </p>
+    {/if}
   </div>
 
   {#if ui.workspace.errors.length > 0}
@@ -224,6 +235,19 @@
     border: 1px solid var(--color-border);
     border-radius: 3px;
     padding: 0.05rem 0.25rem;
+  }
+
+  .empty-state {
+    margin: 0;
+    padding: 1rem 0.75rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+  }
+
+  .empty-state code {
+    font-size: 0.78rem;
+    word-break: break-all;
   }
 
   .errors {

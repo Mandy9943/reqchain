@@ -67,7 +67,7 @@ Everything `reqchain` reads and writes lives under `$REQCHAIN_DIR`, which defaul
 $REQCHAIN_DIR/
 ├── workspace/
 │   └── apis/
-│       ├── example-gateway-test.json    one API per file, named after its `id`
+│       ├── example-gateway-test.json    one API per file; the name is yours to pick
 │       └── library.json
 ├── secrets.json                        flat {"NAME": "value"} map, mode 0600
 ├── cache/

@@ -449,3 +449,28 @@ default chained-auth `ttl`.
 
 Whether a `{{secret:NAME}}` actually exists in the store is a run-time concern, not a file
 concern: the validator only checks that the name is non-empty.
+
+## Known gaps in the desktop app
+
+Phase 2 shipped the window described in §11 of the design spec. Three of that spec's
+promises are deliberately not in it yet. They are listed here rather than left to be
+discovered:
+
+**Secrets cannot be revealed.** §5.3 says secrets are masked "unless the user explicitly
+reveals them". There is no reveal. Everything the window shows — the effective request,
+every auth-trace step, the response, the history — carries `***` in place of a secret, a
+chain-derived token, or a static auth credential. The practical consequence is that
+**"Copy as curl (masked)" produces a command you cannot run as-is**: the credential is
+`***`. Fill it in by hand, or run the request from the app. A reveal is a deliberate hole
+in a masking boundary and needs its own design pass, so it is deferred rather than
+improvised.
+
+**Copy as curl re-resolves the chain.** §8 says the export is "that same effective
+request". It is built by the same code path, but it is resolved fresh at the moment you
+press the button, not lifted from the run displayed above it. If the cached token expired
+in between, the exported command reflects a newer token than the response on screen. The
+shape of the request is identical; only the credential can differ — and it is masked
+anyway.
+
+**Pretty-printing covers JSON, XML and HTML.** Plain text is shown as it arrived, which is
+what §8 intends for it. Nothing else is reformatted.

@@ -279,3 +279,24 @@ credentials supplied locally in `secrets.json`.
 2. Tauri UI — sidebar, request and response panels, environment selector, hot reload,
    shortcuts, copy as curl, history.
 3. Packaging — `.deb`, `.desktop`, icon, install script, README.
+
+## 16. Amendments after phase 2
+
+**§11, request panel.** The spec describes the request panel as enumerated fields
+(method, path, headers, query, body, auth). The implementation is a single CodeMirror
+editor over the API's whole JSON file, plus a read-only summary header for the selected
+endpoint. This was a deliberate decision taken while planning phase 2, and it is ratified
+here rather than left as silent drift: the file is the model — an agent writes it, the
+watcher reloads it, `SPEC.md` documents it — and a field editor would need a second
+serializer that could disagree with `Api::to_json_string`, which is the one thing keeping
+the directory diff-clean. The summary header is what keeps the panel usable; the editor is
+what keeps it honest.
+
+**§5.3, revealing secrets** and **§8, copy as curl.** Both are recorded as known gaps in
+`SPEC.md` under "Known gaps in the desktop app". A reveal path is phase 3 work; it opens a
+hole in a masking boundary and deserves its own design, not a line in a fix round.
+
+**§7, preview.** Selecting an endpoint never performs its auth request. `preview_endpoint`
+resolves variables and static auth but renders a chained credential as a placeholder
+naming its source endpoint. Resolving a chain is a side effect on a real server, and it
+must follow from pressing Send — not from clicking around the sidebar.

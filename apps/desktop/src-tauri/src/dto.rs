@@ -113,6 +113,10 @@ pub struct RunDto {
     pub headers: Vec<[String; 2]>,
     pub body: String,
     pub body_is_binary: bool,
+    /// The body was longer than `MAX_BODY_CHARS` and `body` holds only its
+    /// first `MAX_BODY_CHARS` characters. `size_bytes` still reports the real
+    /// size, so the UI can say how much was withheld.
+    pub body_truncated: bool,
     pub effective: EffectiveDto,
     pub auth_trace: Vec<AuthStepDto>,
 }
@@ -243,10 +247,7 @@ impl RunDto {
         auth_headers: &[String],
     ) -> RunDto {
         let masked_effective = result.effective.masked_with(request_mask, auth_headers);
-        let (body, body_is_binary) = match std::str::from_utf8(&result.body) {
-            Ok(text) => (redact_display(text, response_mask), false),
-            Err(_) => (String::new(), true),
-        };
+        let (body, body_is_binary, body_truncated) = render_body(result, response_mask);
         RunDto {
             status: result.status,
             elapsed_ms: result.elapsed_ms.min(u128::from(u64::MAX)) as u64,
@@ -258,6 +259,7 @@ impl RunDto {
                 .collect(),
             body,
             body_is_binary,
+            body_truncated,
             effective: EffectiveDto::from_masked(&masked_effective),
             auth_trace: result
                 .auth_trace
@@ -266,6 +268,57 @@ impl RunDto {
                 .collect(),
         }
     }
+}
+
+/// Above this, a response body is handed to the webview truncated. A single
+/// `<pre>` holding a 50 MB payload locks up the window, and nobody reads that
+/// far; `size_bytes` still carries the true size.
+pub const MAX_BODY_CHARS: usize = 1_048_576;
+
+/// Content-type families that are binary regardless of whether the bytes
+/// happen to be valid UTF-8 — a small SVG or a JSON-shaped font manifest would
+/// otherwise be dumped into the body pane as text.
+fn is_binary_content_type(headers: &[(String, String)]) -> bool {
+    let Some((_, value)) = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+    else {
+        return false;
+    };
+    let value = value.to_ascii_lowercase();
+    let essence = value.split(';').next().unwrap_or("").trim();
+    essence.starts_with("image/")
+        || essence.starts_with("audio/")
+        || essence.starts_with("video/")
+        || essence.starts_with("font/")
+        || matches!(
+            essence,
+            "application/octet-stream"
+                | "application/pdf"
+                | "application/zip"
+                | "application/gzip"
+                | "application/x-tar"
+                | "application/wasm"
+        )
+}
+
+/// Decides how a response body reaches the webview: `(text, is_binary, truncated)`.
+/// Binary bodies are reported by type and size rather than rendered (spec §8),
+/// and a text body is redacted before it is truncated, never after — cutting
+/// first could leave half a credential in view.
+fn render_body(result: &RunResult, response_mask: &[String]) -> (String, bool, bool) {
+    if is_binary_content_type(&result.headers) {
+        return (String::new(), true, false);
+    }
+    let Ok(text) = std::str::from_utf8(&result.body) else {
+        return (String::new(), true, false);
+    };
+    let redacted = redact_display(text, response_mask);
+    if redacted.chars().count() <= MAX_BODY_CHARS {
+        return (redacted, false, false);
+    }
+    let cut: String = redacted.chars().take(MAX_BODY_CHARS).collect();
+    (cut, false, true)
 }
 
 impl ApiDto {
@@ -285,5 +338,84 @@ impl ApiDto {
                 .collect(),
             text,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqchain_core::model::Method;
+    use reqchain_core::request::EffectiveRequest;
+
+    fn result_with(headers: Vec<(String, String)>, body: Vec<u8>) -> RunResult {
+        let req = EffectiveRequest {
+            method: Method::Get,
+            url: "https://api.example.com/x".into(),
+            headers: vec![],
+            body: None,
+        };
+        RunResult {
+            status: 200,
+            elapsed_ms: 1,
+            size_bytes: body.len(),
+            headers,
+            body,
+            effective: req,
+            auth_trace: vec![],
+        }
+    }
+
+    #[test]
+    fn a_binary_content_type_is_not_rendered_even_when_the_bytes_are_valid_utf8() {
+        // An SVG is valid UTF-8, so UTF-8 validity alone would dump the whole
+        // document into the body pane as text.
+        let result = result_with(
+            vec![("content-type".into(), "image/svg+xml".into())],
+            b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec(),
+        );
+        let (body, is_binary, truncated) = render_body(&result, &[]);
+        assert!(is_binary);
+        assert!(body.is_empty());
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn a_json_content_type_is_still_rendered_as_text() {
+        let result = result_with(
+            vec![(
+                "Content-Type".into(),
+                "application/json; charset=utf-8".into(),
+            )],
+            br#"{"ok":true}"#.to_vec(),
+        );
+        let (body, is_binary, truncated) = render_body(&result, &[]);
+        assert!(!is_binary);
+        assert_eq!(body, r#"{"ok":true}"#);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn a_body_past_the_cap_is_truncated_and_flagged() {
+        let huge = "x".repeat(MAX_BODY_CHARS + 500);
+        let result = result_with(vec![], huge.into_bytes());
+        let (body, is_binary, truncated) = render_body(&result, &[]);
+        assert!(!is_binary);
+        assert!(truncated);
+        assert_eq!(body.chars().count(), MAX_BODY_CHARS);
+    }
+
+    /// Truncation must never be able to expose half of a credential: the mask
+    /// is applied to the whole body first, and only the redacted text is cut.
+    #[test]
+    fn redaction_happens_before_truncation() {
+        let secret = "super-secret-value";
+        let mut body = "y".repeat(MAX_BODY_CHARS - 5);
+        body.push_str(secret);
+        body.push_str(&"z".repeat(100));
+        let result = result_with(vec![], body.into_bytes());
+        let (shown, _, truncated) = render_body(&result, &[secret.to_string()]);
+        assert!(truncated);
+        assert!(!shown.contains(secret));
+        assert!(!shown.contains("super-secret"));
     }
 }
