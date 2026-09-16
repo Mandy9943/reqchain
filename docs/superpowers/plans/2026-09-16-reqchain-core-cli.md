@@ -3278,7 +3278,7 @@ async fn chained_endpoint_runs_without_calling_token_first() {
     Mock::given(method("POST")).and(path("/repairs/1.0"))
         .and(header("authorization", "Bearer live-token"))
         .and(body_string_contains("12345678"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"Reparaciones": []})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"Repairs": []})))
         .mount(&server).await;
 
     let api = GATEWAY.replace("https://api-manager.example.com", &server.uri());
@@ -3296,7 +3296,7 @@ async fn chained_endpoint_runs_without_calling_token_first() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "stderr: {stderr}");
-    assert!(stdout.contains("Reparaciones"), "stdout: {stdout}");
+    assert!(stdout.contains("Repairs"), "stdout: {stdout}");
     assert!(stderr.contains("auth: token -> 200"), "the auth request must be reported: {stderr}");
 }
 
