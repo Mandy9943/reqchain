@@ -121,14 +121,69 @@ async fn computed_header_endpoint_runs() {
 }
 
 /// `--print-command` (named after this brief was written; the flag is not
-/// `--curl`) must still mask secret literals out of the printed command.
+/// `--curl`) must mask a secret literal that actually reaches the printed
+/// request. `odilo.json`'s `token` header is `{{secret:API_TOKEN}}` and goes
+/// out on the wire (and hence into the printed curl command) directly — this
+/// is unlike `GW_PASS` in the gateway fixture, which is only ever consumed to
+/// build the Basic header of the *internal* `/token` fetch and therefore
+/// never appears in `consultaReparacion`'s printed command whether masking
+/// works or not. Gutting `EffectiveRequest::masked()` to a no-op makes this
+/// test fail (verified in a scratch copy — see task-12-report.md, "Fix round 1").
 #[tokio::test]
-async fn printed_command_hides_secret_values() {
+async fn printed_command_masks_a_secret_that_reaches_the_request() {
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/odilo/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"user": "ok"})))
+        .mount(&server)
+        .await;
+
+    let api = ODILO.replace("https://api.test-ceibal.edu.uy", &server.uri());
+    let dir = workspace(
+        &[("odilo.json", api)],
+        serde_json::json!({"API_TOKEN": "sup3rsecret"}),
+    );
+
+    let out = bin()
+        .args([
+            "run",
+            "odilo",
+            "odilo-user",
+            "--env",
+            "test",
+            "--print-command",
+        ])
+        .env("REQCHAIN_DIR", dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("curl "), "got: {stdout}");
+    assert!(
+        !stdout.contains("sup3rsecret"),
+        "secret leaked in printed command: {stdout}"
+    );
+    assert!(
+        stdout.contains("***"),
+        "expected a masked placeholder in place of the secret: {stdout}"
+    );
+}
+
+/// The token *derived* by chained auth is a credential too, and it is masked
+/// by a different mechanism than a literal secret from the store:
+/// `Executor::derived_values()` rather than `Secrets::load`. Prove that path
+/// independently, using a distinctive token value that only the mock issues
+/// at runtime (so it could not appear in the printed command by any route
+/// other than the live chain), and check the `Authorization` header is
+/// reduced to its redacted `Bearer ***` form rather than merely absent by
+/// coincidence.
+#[tokio::test]
+async fn printed_command_masks_the_derived_chain_token() {
+    let server = MockServer::start().await;
+    let issued_token = "tok-should-not-appear";
     Mock::given(method("POST"))
         .and(path("/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "access_token": "live-token",
+            "access_token": issued_token,
             "expires_in": 3600
         })))
         .mount(&server)
@@ -160,8 +215,16 @@ async fn printed_command_hides_secret_values() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.starts_with("curl "), "got: {stdout}");
     assert!(
+        !stdout.contains(issued_token),
+        "derived token leaked in printed command: {stdout}"
+    );
+    assert!(
         !stdout.contains("hunter2"),
-        "export must not leak secret values: {stdout}"
+        "secret leaked in printed command: {stdout}"
+    );
+    assert!(
+        stdout.contains("Bearer ***"),
+        "expected the Authorization header reduced to its redacted form, got: {stdout}"
     );
 }
 
