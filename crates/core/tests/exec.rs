@@ -77,7 +77,7 @@ async fn computed_header_is_evaluated() {
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/odilo/user"))
+        .and(path("/library/user"))
         .and(header("user", "12345678"))
         .and(header("hash", expected.as_str()))
         .respond_with(ResponseTemplate::new(200))
@@ -85,7 +85,7 @@ async fn computed_header_is_evaluated() {
         .await;
 
     let api = api_with_base(&server.uri());
-    let ep = api.endpoint("odilo").unwrap();
+    let ep = api.endpoint("library").unwrap();
     let secrets = Secrets::from_map([("API_TOKEN".into(), "t0k".into())]);
     let scope = Scope::new(&api, ep, Some("test"), &secrets);
     let mut req = request::build(&api, ep, &scope).unwrap();
@@ -100,7 +100,7 @@ fn shell_export_masks_secret_values() {
     let text = include_str!("../../../tests/fixtures/exec.json")
         .replace("BASE_URL", "https://example.test");
     let api = Api::from_json(&text).unwrap();
-    let ep = api.endpoint("odilo").unwrap();
+    let ep = api.endpoint("library").unwrap();
     let secrets = Secrets::from_map([("API_TOKEN".into(), "sup3rsecret".into())]);
     let scope = Scope::new(&api, ep, Some("test"), &secrets);
     let mut req = request::build(&api, ep, &scope).unwrap();

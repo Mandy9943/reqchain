@@ -8,7 +8,7 @@
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],

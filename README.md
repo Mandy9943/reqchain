@@ -50,8 +50,8 @@ Everything `reqchain` reads and writes lives under `$REQCHAIN_DIR`, which defaul
 $REQCHAIN_DIR/
 ├── workspace/
 │   └── apis/
-│       ├── ceibal-gateway-test.json    one API per file, named after its `id`
-│       └── odilo.json
+│       ├── example-gateway-test.json    one API per file, named after its `id`
+│       └── library.json
 ├── secrets.json                        flat {"NAME": "value"} map, mode 0600
 ├── cache/
 │   └── tokens.json                     chained-auth token cache, managed by reqchain
@@ -100,7 +100,7 @@ The repository ships the two examples from SPEC.md in `tests/fixtures`. Copy the
 workspace and try them:
 
 ```sh
-cp tests/fixtures/ceibal-gateway-test.json tests/fixtures/odilo.json \
+cp tests/fixtures/example-gateway-test.json tests/fixtures/library.json \
    ~/.config/reqchain/workspace/apis/
 
 reqchain validate
@@ -111,13 +111,13 @@ reqchain list
 specific files:
 
 ```sh
-reqchain validate tests/fixtures/odilo.json
+reqchain validate tests/fixtures/library.json
 ```
 
 Run an endpoint, selecting an environment:
 
 ```sh
-reqchain run ceibal-gateway-test consultaReparacion --env test
+reqchain run example-gateway-test repairQuery --env test
 ```
 
 `reqchain` calls the `token` endpoint first, caches the token for its `expires_in`, injects
@@ -127,10 +127,10 @@ auth trace go to stderr, the response body to stdout.
 To see the request without sending it:
 
 ```sh
-reqchain run odilo odilo-user --env test --print-command
+reqchain run library library-user --env test --print-command
 ```
 
-Both examples point at Ceibal test hosts and need real credentials in the secret store to
+Both examples point at example test hosts and need real credentials in the secret store to
 return anything; `validate` and `list` work without network access.
 
 `--print-command` never sends the endpoint's own request — a `DELETE` endpoint printed this

@@ -2,7 +2,7 @@ use std::process::Command;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const GOOD: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 const CHAIN: &str = include_str!("../../../tests/fixtures/chain.json");
 
 fn bin() -> Command {
@@ -29,8 +29,8 @@ fn list_prints_apis_and_endpoints() {
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success());
-    assert!(text.contains("ceibal-gateway-test"));
-    assert!(text.contains("consultaReparacion"));
+    assert!(text.contains("example-gateway-test"));
+    assert!(text.contains("repairQuery"));
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn validate_accepts_an_explicit_file_path() {
 fn unknown_endpoint_is_a_usage_error() {
     let dir = workspace_with(&[("a.json", GOOD)]);
     let out = bin()
-        .args(["run", "ceibal-gateway-test", "ghost"])
+        .args(["run", "example-gateway-test", "ghost"])
         .env("REQCHAIN_DIR", dir.path())
         .output()
         .unwrap();

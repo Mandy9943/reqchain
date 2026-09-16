@@ -52,7 +52,7 @@ it, so every rule below is testable headless.
 ~/.config/reqchain/
 ├── workspace/                          # git-versionable, never contains secrets
 │   ├── apis/
-│   │   └── ceibal-gateway-test.json    # one API: config + environments + endpoints
+│   │   └── example-gateway-test.json    # one API: config + environments + endpoints
 │   └── .gitignore
 ├── secrets.json                        # mode 0600, source of {{secret:NAME}}
 ├── cache/tokens.json                   # mode 0600, CLI token cache
@@ -125,7 +125,7 @@ Functions: `md5`, `sha1`, `sha256`, `base64`, `now(format)`. `now` accepts
 `+` concatenates strings.
 
 An unknown function is a validation error naming the function and listing the supported
-set. Example from the acceptance case: `md5(now("YYYYMMDD") + documento)`.
+set. Example from the acceptance case: `md5(now("YYYYMMDD") + person_id)`.
 
 ## 7. Chained auth
 
@@ -242,7 +242,7 @@ Critical paths, all headless against a local mock server (`wiremock`):
 1. **Variable resolution** — precedence endpoint → environment → API, interpolation in
    url/headers/query/body, unresolved variable error, `{{secret:}}` resolution and masking.
 2. **Expression language** — each function, concatenation, `now` formats, unknown function
-   error, the `md5(now("YYYYMMDD") + documento)` case.
+   error, the `md5(now("YYYYMMDD") + person_id)` case.
 3. **Auth chain** — chained run without the source endpoint having been run manually,
    extraction by jsonPath / header / regex, injection as header / query / body, multi-level
    chaining, cycle detection, depth limit.
@@ -254,18 +254,18 @@ Critical paths, all headless against a local mock server (`wiremock`):
 
 ## 14. Acceptance criteria
 
-**Case 1 — chained auth.** API "Ceibal Gateway (test)",
-`baseUrl = https://api-manager.test-ceibal.edu.uy`. Endpoint `token`: `POST /token`,
+**Case 1 — chained auth.** API "Example Gateway (test)",
+`baseUrl = https://api-manager.example.com`. Endpoint `token`: `POST /token`,
 basic auth with username and password as secrets, form-urlencoded body
-`grant_type=client_credentials`. Endpoint `consultaReparacion`: `POST
-/consultareparacion/1.0`, chained auth on `token`, extracting `$.access_token`, injected
+`grant_type=client_credentials`. Endpoint `repairQuery`: `POST
+/repairs/1.0`, chained auth on `token`, extracting `$.access_token`, injected
 as `Authorization: Bearer {{value}}`, TTL from `$.expires_in`, JSON body
-`{"SDTConsultaReparacion_In":{"PersonaDocumento":"{{documento}}"}}` with `documento` as an
-environment variable. Pressing Send on `consultaReparacion` without having run `token`
+`{"RepairQuery_In":{"PersonId":"{{person_id}}"}}` with `person_id` as an
+environment variable. Pressing Send on `repairQuery` without having run `token`
 must work, and an expired token must be refreshed without user action.
 
-**Case 2 — computed header.** API `https://api.test-ceibal.edu.uy`, `GET /odilo/user`
-with headers `user: {{documento}}`, `hash: md5(now("YYYYMMDD") + documento)` and
+**Case 2 — computed header.** API `https://api.example.com`, `GET /library/user`
+with headers `user: {{person_id}}`, `hash: md5(now("YYYYMMDD") + person_id)` and
 `token: {{secret:API_TOKEN}}`.
 
 Both cases are verified automatically against the mock server. The real API files are

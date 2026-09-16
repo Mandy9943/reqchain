@@ -8,7 +8,7 @@
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -71,7 +71,7 @@
       "body": {
         "type": "json",
         "content": {
-          "doc": "{{documento}}"
+          "doc": "{{person_id}}"
         }
       }
     },
@@ -148,7 +148,7 @@
       "body": {
         "type": "json",
         "content": {
-          "doc": "{{documento}}",
+          "doc": "{{person_id}}",
           "token": ""
         }
       }
@@ -178,7 +178,7 @@
       "body": {
         "type": "json",
         "content": {
-          "doc": "{{documento}}"
+          "doc": "{{person_id}}"
         }
       }
     },

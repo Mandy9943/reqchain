@@ -1,6 +1,6 @@
 use reqchain_core::validate::{validate_text, Diagnostic, Severity};
 
-const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const GOOD: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 
 fn errors(diags: &[Diagnostic]) -> Vec<String> {
     diags
@@ -36,10 +36,10 @@ fn reports_a_chained_auth_pointing_at_a_missing_endpoint() {
 
 #[test]
 fn reports_an_unknown_variable() {
-    let bad = GOOD.replace("{{documento}}", "{{documentoo}}");
+    let bad = GOOD.replace("{{person_id}}", "{{person_ido}}");
     let msgs = errors(&validate_text(&bad));
     assert!(
-        msgs.iter().any(|m| m.contains("documentoo")),
+        msgs.iter().any(|m| m.contains("person_ido")),
         "got: {msgs:?}"
     );
 }
@@ -169,7 +169,7 @@ fn api_with_auth(auth_json: &str) -> String {
   "id": "t",
   "name": "T",
   "baseUrl": "https://example.test",
-  "variables": {{ "documento": "1" }},
+  "variables": {{ "person_id": "1" }},
   "endpoints": [
     {{
       "id": "e",
@@ -197,7 +197,7 @@ fn reports_an_unknown_variable_in_a_bearer_token() {
 #[test]
 fn reports_an_unknown_variable_in_a_basic_password() {
     let msgs = errors(&validate_text(&api_with_auth(
-        r#"{ "type": "basic", "username": "{{documento}}", "password": "{{typo}}" }"#,
+        r#"{ "type": "basic", "username": "{{person_id}}", "password": "{{typo}}" }"#,
     )));
     assert!(
         msgs.iter().any(|m| m.contains("unknown variable `typo`")),
@@ -234,9 +234,9 @@ fn reports_an_unknown_variable_in_a_header_auth_value() {
 fn correct_auth_variable_references_still_validate() {
     for auth in [
         r#"{ "type": "bearer", "token": "{{secret:TOK}}" }"#,
-        r#"{ "type": "basic", "username": "{{documento}}", "password": "{{secret:PW}}" }"#,
-        r#"{ "type": "computed", "name": "hash", "expression": "md5({{documento}})" }"#,
-        r#"{ "type": "header", "headers": { "x-k": "{{documento}}" } }"#,
+        r#"{ "type": "basic", "username": "{{person_id}}", "password": "{{secret:PW}}" }"#,
+        r#"{ "type": "computed", "name": "hash", "expression": "md5({{person_id}})" }"#,
+        r#"{ "type": "header", "headers": { "x-k": "{{person_id}}" } }"#,
     ] {
         let msgs = errors(&validate_text(&api_with_auth(auth)));
         assert!(msgs.is_empty(), "{auth} should be clean, got: {msgs:?}");
@@ -276,7 +276,7 @@ fn the_concatenating_form_of_that_expression_is_accepted() {
 #[test]
 fn a_plain_string_literal_is_not_flagged() {
     let msgs = errors(&validate_text(&api_with_auth(
-        r#"{ "type": "computed", "name": "x", "expression": "md5(now(\"YYYYMMDD\") + {{documento}})" }"#,
+        r#"{ "type": "computed", "name": "x", "expression": "md5(now(\"YYYYMMDD\") + {{person_id}})" }"#,
     )));
     assert!(msgs.is_empty(), "got: {msgs:?}");
 }

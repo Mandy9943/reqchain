@@ -12,7 +12,7 @@ fn workspace_with(files: &[(&str, &str)]) -> (tempfile::TempDir, Paths) {
     (dir, paths)
 }
 
-const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const GOOD: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 
 #[test]
 fn loads_valid_apis() {

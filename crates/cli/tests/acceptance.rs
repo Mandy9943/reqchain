@@ -8,8 +8,8 @@ use std::process::Command;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const GATEWAY: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
-const ODILO: &str = include_str!("../../../tests/fixtures/odilo.json");
+const GATEWAY: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
+const LIBRARY: &str = include_str!("../../../tests/fixtures/library.json");
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_reqchain"))
@@ -26,7 +26,7 @@ fn workspace(files: &[(&str, String)], store: serde_json::Value) -> tempfile::Te
     dir
 }
 
-/// Spec §14 case 1: pressing "run" on `consultaReparacion` works WITHOUT the
+/// Spec §14 case 1: pressing "run" on `repairQuery` works WITHOUT the
 /// `token` endpoint having been run by hand — the CLI fetches the token,
 /// injects it as `Authorization: Bearer <token>`, and the auth step is
 /// reported on stderr.
@@ -44,7 +44,7 @@ async fn chained_endpoint_runs_without_calling_token_first() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/consultareparacion/1.0"))
+        .and(path("/repairs/1.0"))
         .and(header("authorization", "Bearer live-token"))
         .and(body_string_contains("12345678"))
         .respond_with(
@@ -53,7 +53,7 @@ async fn chained_endpoint_runs_without_calling_token_first() {
         .mount(&server)
         .await;
 
-    let api = GATEWAY.replace("https://api-manager.test-ceibal.edu.uy", &server.uri());
+    let api = GATEWAY.replace("https://api-manager.example.com", &server.uri());
     let dir = workspace(
         &[("gateway.json", api)],
         serde_json::json!({"GW_USER": "alice", "GW_PASS": "hunter2"}),
@@ -62,8 +62,8 @@ async fn chained_endpoint_runs_without_calling_token_first() {
     let out = bin()
         .args([
             "run",
-            "ceibal-gateway-test",
-            "consultaReparacion",
+            "example-gateway-test",
+            "repairQuery",
             "--env",
             "test",
         ])
@@ -83,8 +83,8 @@ async fn chained_endpoint_runs_without_calling_token_first() {
     );
 }
 
-/// Spec §14 case 2: `GET /odilo/user` with `user`, `token` (from the secret
-/// store) and a computed `hash: md5(now("YYYYMMDD") + documento)` header.
+/// Spec §14 case 2: `GET /library/user` with `user`, `token` (from the secret
+/// store) and a computed `hash: md5(now("YYYYMMDD") + person_id)` header.
 #[tokio::test]
 async fn computed_header_endpoint_runs() {
     let server = MockServer::start().await;
@@ -94,7 +94,7 @@ async fn computed_header_endpoint_runs() {
         md5_simple::compute(format!("{today}12345678").as_bytes())
     );
     Mock::given(method("GET"))
-        .and(path("/odilo/user"))
+        .and(path("/library/user"))
         .and(header("user", "12345678"))
         .and(header("hash", expected_hash.as_str()))
         .and(header("token", "api-token-value"))
@@ -102,14 +102,14 @@ async fn computed_header_endpoint_runs() {
         .mount(&server)
         .await;
 
-    let api = ODILO.replace("https://api.test-ceibal.edu.uy", &server.uri());
+    let api = LIBRARY.replace("https://api.example.com", &server.uri());
     let dir = workspace(
-        &[("odilo.json", api)],
+        &[("library.json", api)],
         serde_json::json!({"API_TOKEN": "api-token-value"}),
     );
 
     let out = bin()
-        .args(["run", "odilo", "odilo-user", "--env", "test"])
+        .args(["run", "library", "library-user", "--env", "test"])
         .env("REQCHAIN_DIR", dir.path())
         .output()
         .unwrap();
@@ -122,33 +122,33 @@ async fn computed_header_endpoint_runs() {
 
 /// `--print-command` (named after this brief was written; the flag is not
 /// `--curl`) must mask a secret literal that actually reaches the printed
-/// request. `odilo.json`'s `token` header is `{{secret:API_TOKEN}}` and goes
+/// request. `library.json`'s `token` header is `{{secret:API_TOKEN}}` and goes
 /// out on the wire (and hence into the printed curl command) directly — this
 /// is unlike `GW_PASS` in the gateway fixture, which is only ever consumed to
 /// build the Basic header of the *internal* `/token` fetch and therefore
-/// never appears in `consultaReparacion`'s printed command whether masking
+/// never appears in `repairQuery`'s printed command whether masking
 /// works or not. Gutting `EffectiveRequest::masked()` to a no-op makes this
 /// test fail (verified in a scratch copy — see task-12-report.md, "Fix round 1").
 #[tokio::test]
 async fn printed_command_masks_a_secret_that_reaches_the_request() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/odilo/user"))
+        .and(path("/library/user"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"user": "ok"})))
         .mount(&server)
         .await;
 
-    let api = ODILO.replace("https://api.test-ceibal.edu.uy", &server.uri());
+    let api = LIBRARY.replace("https://api.example.com", &server.uri());
     let dir = workspace(
-        &[("odilo.json", api)],
+        &[("library.json", api)],
         serde_json::json!({"API_TOKEN": "sup3rsecret"}),
     );
 
     let out = bin()
         .args([
             "run",
-            "odilo",
-            "odilo-user",
+            "library",
+            "library-user",
             "--env",
             "test",
             "--print-command",
@@ -189,12 +189,12 @@ async fn printed_command_masks_the_derived_chain_token() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/consultareparacion/1.0"))
+        .and(path("/repairs/1.0"))
         .respond_with(ResponseTemplate::new(200))
         .mount(&server)
         .await;
 
-    let api = GATEWAY.replace("https://api-manager.test-ceibal.edu.uy", &server.uri());
+    let api = GATEWAY.replace("https://api-manager.example.com", &server.uri());
     let dir = workspace(
         &[("gateway.json", api)],
         serde_json::json!({"GW_USER": "alice", "GW_PASS": "hunter2"}),
@@ -203,8 +203,8 @@ async fn printed_command_masks_the_derived_chain_token() {
     let out = bin()
         .args([
             "run",
-            "ceibal-gateway-test",
-            "consultaReparacion",
+            "example-gateway-test",
+            "repairQuery",
             "--env",
             "test",
             "--print-command",
@@ -244,7 +244,7 @@ async fn token_is_reused_across_consecutive_invocations() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/consultareparacion/1.0"))
+        .and(path("/repairs/1.0"))
         .and(header("authorization", "Bearer live-token"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"Reparaciones": []})),
@@ -252,7 +252,7 @@ async fn token_is_reused_across_consecutive_invocations() {
         .mount(&server)
         .await;
 
-    let api = GATEWAY.replace("https://api-manager.test-ceibal.edu.uy", &server.uri());
+    let api = GATEWAY.replace("https://api-manager.example.com", &server.uri());
     let dir = workspace(
         &[("gateway.json", api)],
         serde_json::json!({"GW_USER": "alice", "GW_PASS": "hunter2"}),
@@ -262,8 +262,8 @@ async fn token_is_reused_across_consecutive_invocations() {
         let out = bin()
             .args([
                 "run",
-                "ceibal-gateway-test",
-                "consultaReparacion",
+                "example-gateway-test",
+                "repairQuery",
                 "--env",
                 "test",
             ])
@@ -314,7 +314,7 @@ async fn expired_token_is_refreshed_automatically() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/consultareparacion/1.0"))
+        .and(path("/repairs/1.0"))
         .and(header("authorization", "Bearer live-token"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"Reparaciones": []})),
@@ -322,7 +322,7 @@ async fn expired_token_is_refreshed_automatically() {
         .mount(&server)
         .await;
 
-    let api = GATEWAY.replace("https://api-manager.test-ceibal.edu.uy", &server.uri());
+    let api = GATEWAY.replace("https://api-manager.example.com", &server.uri());
     let dir = workspace(
         &[("gateway.json", api)],
         serde_json::json!({"GW_USER": "alice", "GW_PASS": "hunter2"}),
@@ -332,8 +332,8 @@ async fn expired_token_is_refreshed_automatically() {
         let out = bin()
             .args([
                 "run",
-                "ceibal-gateway-test",
-                "consultaReparacion",
+                "example-gateway-test",
+                "repairQuery",
                 "--env",
                 "test",
             ])

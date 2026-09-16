@@ -45,12 +45,12 @@ fn every_spec_example_validates() {
 fn spec_examples_match_their_fixtures() {
     let fixtures = [
         (
-            "tests/fixtures/ceibal-gateway-test.json",
-            include_str!("../../../tests/fixtures/ceibal-gateway-test.json"),
+            "tests/fixtures/example-gateway-test.json",
+            include_str!("../../../tests/fixtures/example-gateway-test.json"),
         ),
         (
-            "tests/fixtures/odilo.json",
-            include_str!("../../../tests/fixtures/odilo.json"),
+            "tests/fixtures/library.json",
+            include_str!("../../../tests/fixtures/library.json"),
         ),
     ];
     let examples = spec_examples();
@@ -71,8 +71,8 @@ fn spec_examples_match_their_fixtures() {
 }
 
 #[test]
-fn the_odilo_fixture_validates() {
-    let errors: Vec<_> = validate_text(include_str!("../../../tests/fixtures/odilo.json"))
+fn the_library_fixture_validates() {
+    let errors: Vec<_> = validate_text(include_str!("../../../tests/fixtures/library.json"))
         .into_iter()
         .filter(|d| d.severity == Severity::Error)
         .collect();

@@ -250,7 +250,7 @@
           "properties": {
             "type": { "const": "computed", "description": "Discriminator identifying this as computed auth." },
             "name": { "type": "string", "description": "The name of the header to set with the computed value." },
-            "expression": { "type": "string", "description": "The expression to evaluate, such as `md5(now(\"YYYYMMDD\") + {{documento}})`." }
+            "expression": { "type": "string", "description": "The expression to evaluate, such as `md5(now(\"YYYYMMDD\") + {{person_id}})`." }
           }
         },
         {

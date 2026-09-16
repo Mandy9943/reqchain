@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "id": "ceibal-gateway-test",
-  "name": "Ceibal Gateway (test)",
-  "baseUrl": "https://api-manager.test-ceibal.edu.uy",
+  "id": "example-gateway-test",
+  "name": "Example Gateway (test)",
+  "baseUrl": "https://api-manager.example.com",
   "variables": {},
   "environments": [
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -37,10 +37,10 @@
       }
     },
     {
-      "id": "consultaReparacion",
-      "name": "Consulta Reparacion",
+      "id": "repairQuery",
+      "name": "Repair Query",
       "method": "POST",
-      "path": "/consultareparacion/1.0",
+      "path": "/repairs/1.0",
       "headers": {},
       "query": {},
       "variables": {},
@@ -71,8 +71,8 @@
       "body": {
         "type": "json",
         "content": {
-          "SDTConsultaReparacion_In": {
-            "PersonaDocumento": "{{documento}}"
+          "RepairQuery_In": {
+            "PersonId": "{{person_id}}"
           }
         }
       }

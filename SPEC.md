@@ -13,7 +13,7 @@ obtained by calling another endpoint in the same file first.
 ## 2. Rules
 
 1. One API per file. A file contains exactly one top-level object, never an array.
-2. Name the file after the `id` field: `id: "odilo"` lives in `odilo.json`. This is a
+2. Name the file after the `id` field: `id: "library"` lives in `library.json`. This is a
    convention, not a checked rule — every `*.json` file in the directory is loaded and
    indexed by its `id` field, and `validate` does not look at the file name.
 3. `schemaVersion` must be the integer `1`. Any other value is rejected at load time.
@@ -27,22 +27,22 @@ obtained by calling another endpoint in the same file first.
 
 ## 3. Complete example 1 — chained auth
 
-`tests/fixtures/ceibal-gateway-test.json`. An OAuth2-style gateway: a `token` endpoint
+`tests/fixtures/example-gateway-test.json`. An OAuth2-style gateway: a `token` endpoint
 authenticated with HTTP Basic against two secrets, and a business endpoint whose bearer
 token is fetched from it.
 
 ```json
 {
   "schemaVersion": 1,
-  "id": "ceibal-gateway-test",
-  "name": "Ceibal Gateway (test)",
-  "baseUrl": "https://api-manager.test-ceibal.edu.uy",
+  "id": "example-gateway-test",
+  "name": "Example Gateway (test)",
+  "baseUrl": "https://api-manager.example.com",
   "variables": {},
   "environments": [
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -71,10 +71,10 @@ token is fetched from it.
       }
     },
     {
-      "id": "consultaReparacion",
-      "name": "Consulta Reparacion",
+      "id": "repairQuery",
+      "name": "Repair Query",
       "method": "POST",
-      "path": "/consultareparacion/1.0",
+      "path": "/repairs/1.0",
       "headers": {},
       "query": {},
       "variables": {},
@@ -105,8 +105,8 @@ token is fetched from it.
       "body": {
         "type": "json",
         "content": {
-          "SDTConsultaReparacion_In": {
-            "PersonaDocumento": "{{documento}}"
+          "RepairQuery_In": {
+            "PersonId": "{{person_id}}"
           }
         }
       }
@@ -121,29 +121,29 @@ Block by block:
 | --- | --- |
 | `schemaVersion`, `id`, `name`, `baseUrl` | The four required identity fields. `baseUrl` is prefixed to every endpoint `path`. |
 | `variables: {}` | No API-level variables; the object may be omitted entirely. |
-| `environments` | One environment, `test`, defining `documento`. Selected with `reqchain run ... --env test`. |
+| `environments` | One environment, `test`, defining `person_id`. Selected with `reqchain run ... --env test`. |
 | `auth: {"type": "none"}` | API-level default. Endpoints that say nothing inherit it. |
 | `endpoints[0]` (`token`) | `POST /token` with a URL-encoded form body, authenticated with HTTP Basic from two secrets. This endpoint exists only to produce a token. |
 | `endpoints[1].auth` | Chained auth: call `token`, take `$.access_token` from its JSON body, cache it for `$.expires_in` seconds, inject it as `Authorization: Bearer <token>`, and on a 401 or 403 refetch once and retry. |
-| `endpoints[1].body` | A JSON body; `{{documento}}` resolves from the active environment. |
+| `endpoints[1].body` | A JSON body; `{{person_id}}` resolves from the active environment. |
 
 ## 4. Complete example 2 — computed header
 
-`tests/fixtures/odilo.json`. No token endpoint: the credential is a hash computed at
+`tests/fixtures/library.json`. No token endpoint: the credential is a hash computed at
 request time from the current date and a variable, sent alongside a static secret header.
 
 ```json
 {
   "schemaVersion": 1,
-  "id": "odilo",
-  "name": "Odilo (test)",
-  "baseUrl": "https://api.test-ceibal.edu.uy",
+  "id": "library",
+  "name": "Library (test)",
+  "baseUrl": "https://api.example.com",
   "variables": {},
   "environments": [
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -152,20 +152,20 @@ request time from the current date and a variable, sent alongside a static secre
   },
   "endpoints": [
     {
-      "id": "odilo-user",
-      "name": "Odilo User",
+      "id": "library-user",
+      "name": "Library User",
       "method": "GET",
-      "path": "/odilo/user",
+      "path": "/library/user",
       "headers": {
         "token": "{{secret:API_TOKEN}}",
-        "user": "{{documento}}"
+        "user": "{{person_id}}"
       },
       "query": {},
       "variables": {},
       "auth": {
         "type": "computed",
         "name": "hash",
-        "expression": "md5(now(\"YYYYMMDD\") + {{documento}})"
+        "expression": "md5(now(\"YYYYMMDD\") + {{person_id}})"
       }
     }
   ]
@@ -173,7 +173,7 @@ request time from the current date and a variable, sent alongside a static secre
 ```
 
 The `computed` auth sets one header, `hash`, to the MD5 of today's date in `YYYYMMDD`
-form concatenated with `documento`. The `token` and `user` headers are ordinary headers:
+form concatenated with `person_id`. The `token` and `user` headers are ordinary headers:
 `token` comes from the secret store, `user` from the environment. The endpoint has no
 `body`, so the field is omitted.
 
@@ -303,7 +303,7 @@ The first scope that defines the name wins. Rules:
   and is substituted there without going through variable lookup. Anywhere else it is an
   ordinary variable reference: the validator accepts it, but the run fails unless a
   variable named `value` is actually defined.
-- Whitespace inside the braces is trimmed: `{{ documento }}` and `{{documento}}` are the
+- Whitespace inside the braces is trimmed: `{{ person_id }}` and `{{person_id}}` are the
   same reference.
 - An unterminated `{{` is left in the text verbatim rather than being treated as a
   reference.
@@ -358,7 +358,7 @@ the request is built, and again at run time.
 | `mm` | 2-digit minute |
 | `ss` | 2-digit second |
 
-Example: `md5(now("YYYYMMDD") + {{documento}})` — see §4.
+Example: `md5(now("YYYYMMDD") + {{person_id}})` — see §4.
 
 ## 8. Chained auth
 

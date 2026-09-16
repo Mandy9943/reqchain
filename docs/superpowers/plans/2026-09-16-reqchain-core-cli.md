@@ -29,7 +29,7 @@
 - Create: `Cargo.toml`, `rust-toolchain.toml`, `.gitignore`
 - Create: `crates/core/Cargo.toml`, `crates/core/src/lib.rs`, `crates/core/src/model.rs`
 - Test: `crates/core/tests/model_roundtrip.rs`
-- Create: `tests/fixtures/ceibal-gateway-test.json`
+- Create: `tests/fixtures/example-gateway-test.json`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -92,12 +92,12 @@ tempfile = "3"
 ```rust
 use reqchain_core::model::Api;
 
-const FIXTURE: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const FIXTURE: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 
 #[test]
 fn parses_and_reserializes_byte_identically() {
     let api = Api::from_json(FIXTURE).expect("fixture must parse");
-    assert_eq!(api.id, "ceibal-gateway-test");
+    assert_eq!(api.id, "example-gateway-test");
     assert_eq!(api.endpoints.len(), 2);
     assert_eq!(api.to_json_string(), FIXTURE);
 }
@@ -118,20 +118,20 @@ fn rejects_unknown_fields() {
 }
 ```
 
-Create `tests/fixtures/ceibal-gateway-test.json` with exactly this content (2-space indent, trailing newline — this fixture is also the spec §14 acceptance file):
+Create `tests/fixtures/example-gateway-test.json` with exactly this content (2-space indent, trailing newline — this fixture is also the spec §14 acceptance file):
 
 ```json
 {
   "schemaVersion": 1,
-  "id": "ceibal-gateway-test",
-  "name": "Ceibal Gateway (test)",
-  "baseUrl": "https://api-manager.test-ceibal.edu.uy",
+  "id": "example-gateway-test",
+  "name": "Example Gateway (test)",
+  "baseUrl": "https://api-manager.example.com",
   "variables": {},
   "environments": [
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -160,10 +160,10 @@ Create `tests/fixtures/ceibal-gateway-test.json` with exactly this content (2-sp
       }
     },
     {
-      "id": "consultaReparacion",
-      "name": "Consulta Reparacion",
+      "id": "repairQuery",
+      "name": "Repair Query",
       "method": "POST",
-      "path": "/consultareparacion/1.0",
+      "path": "/repairs/1.0",
       "headers": {},
       "query": {},
       "variables": {},
@@ -191,8 +191,8 @@ Create `tests/fixtures/ceibal-gateway-test.json` with exactly this content (2-sp
       "body": {
         "type": "json",
         "content": {
-          "SDTConsultaReparacion_In": {
-            "PersonaDocumento": "{{documento}}"
+          "RepairQuery_In": {
+            "PersonId": "{{person_id}}"
           }
         }
       }
@@ -434,7 +434,7 @@ fn workspace_with(files: &[(&str, &str)]) -> (tempfile::TempDir, Paths) {
     (dir, paths)
 }
 
-const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const GOOD: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 
 #[test]
 fn loads_valid_apis() {
@@ -1167,7 +1167,7 @@ async fn computed_header_is_evaluated() {
     let today = chrono::Local::now().format("%Y%m%d").to_string();
     let expected = format!("{:x}", md5::compute(format!("{today}12345678").as_bytes()));
     Mock::given(method("GET"))
-        .and(path("/odilo/user"))
+        .and(path("/library/user"))
         .and(header("hash", expected.as_str()))
         .and(header("user", "12345678"))
         .respond_with(ResponseTemplate::new(200))
@@ -1175,7 +1175,7 @@ async fn computed_header_is_evaluated() {
         .await;
 
     let api = api_with_base(&server.uri());
-    let ep = api.endpoint("odilo").unwrap();
+    let ep = api.endpoint("library").unwrap();
     let secrets = Secrets::from_map([("API_TOKEN".into(), "t0k".into())]);
     let scope = Scope::new(&api, ep, Some("test"), &secrets);
     let mut req = request::build(&api, ep, &scope).unwrap();
@@ -1186,7 +1186,7 @@ async fn computed_header_is_evaluated() {
 #[test]
 fn shell_export_masks_secret_values() {
     let api = api_with_base("https://example.test");
-    let ep = api.endpoint("odilo").unwrap();
+    let ep = api.endpoint("library").unwrap();
     let secrets = Secrets::from_map([("API_TOKEN".into(), "sup3rsecret".into())]);
     let scope = Scope::new(&api, ep, Some("test"), &secrets);
     let mut req = request::build(&api, ep, &scope).unwrap();
@@ -1211,7 +1211,7 @@ Create `tests/fixtures/exec.json`:
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -1225,7 +1225,7 @@ Create `tests/fixtures/exec.json`:
       "method": "POST",
       "path": "/echo/1.0",
       "headers": {
-        "x-doc": "{{documento}}"
+        "x-doc": "{{person_id}}"
       },
       "query": {
         "trace": "on"
@@ -1237,25 +1237,25 @@ Create `tests/fixtures/exec.json`:
       "body": {
         "type": "json",
         "content": {
-          "doc": "{{documento}}"
+          "doc": "{{person_id}}"
         }
       }
     },
     {
-      "id": "odilo",
-      "name": "Odilo user",
+      "id": "library",
+      "name": "Library user",
       "method": "GET",
-      "path": "/odilo/user",
+      "path": "/library/user",
       "headers": {
         "token": "{{secret:API_TOKEN}}",
-        "user": "{{documento}}"
+        "user": "{{person_id}}"
       },
       "query": {},
       "variables": {},
       "auth": {
         "type": "computed",
         "name": "hash",
-        "expression": "md5(now(\"YYYYMMDD\") + {{documento}})"
+        "expression": "md5(now(\"YYYYMMDD\") + {{person_id}})"
       }
     }
   ]
@@ -1630,14 +1630,14 @@ fn chained_is_left_for_the_chain_resolver() {
 
 Create `tests/fixtures/auth-static.json`: `id` `auth-static`, `baseUrl` `https://example.test`,
 API-level `auth` `{"type":"bearer","token":"api-level"}`, one environment `test` with
-`documento: "12345678"`, and six endpoints — all `GET`, `path` `/x`, empty
+`person_id: "12345678"`, and six endpoints — all `GET`, `path` `/x`, empty
 `headers`/`query`/`variables`, no `body`:
 
 | id | auth |
 |---|---|
 | `basic` | `{"type":"basic","username":"{{secret:GW_USER}}","password":"{{secret:GW_PASS}}"}` |
 | `bearer` | `{"type":"bearer","token":"static-token"}` |
-| `custom` | `{"type":"header","headers":{"x-api-key":"abc123","x-user":"{{documento}}"}}` |
+| `custom` | `{"type":"header","headers":{"x-api-key":"abc123","x-user":"{{person_id}}"}}` |
 | `inheriting` | `{"type":"inherit"}` |
 | `opted-out` | `{"type":"none"}` |
 | `chained` | `{"type":"chained","source":{"endpoint":"bearer"},"inject":{"into":"header","name":"Authorization","template":"Bearer {{value}}"}}` |
@@ -2134,14 +2134,14 @@ async fn default_extract_path_missing_says_so_explicitly() {
 ```
 
 Create the fixtures. All four use `"baseUrl": "BASE_URL"`, API-level `auth`
-`{"type":"none"}`, and one environment `test` with `documento: "12345678"`.
+`{"type":"none"}`, and one environment `test` with `person_id: "12345678"`.
 
 `tests/fixtures/chain.json` endpoints:
 
 | id | method / path | auth |
 |---|---|---|
 | `token` | `POST /token` | `basic` with `{{secret:GW_USER}}` / `{{secret:GW_PASS}}`; body `form` with `grant_type: client_credentials` |
-| `business` | `POST /business` | `chained` on `token`, extract body `$.access_token`, ttl body `$.expires_in` seconds, inject header `Authorization` template `Bearer {{value}}`, `retryOn: [401, 403]`; body `json` `{"doc":"{{documento}}"}` |
+| `business` | `POST /business` | `chained` on `token`, extract body `$.access_token`, ttl body `$.expires_in` seconds, inject header `Authorization` template `Bearer {{value}}`, `retryOn: [401, 403]`; body `json` `{"doc":"{{person_id}}"}` |
 | `header-business` | `GET /header-business` | `chained` on `token`, `extract` `{"from":"header","name":"x-token"}`, no `ttl`, inject header `Authorization` template `Bearer {{value}}` |
 | `query-business` | `GET /query-business` | `chained` on `token`, extract body `$.access_token`, inject `{"into":"query","name":"access_token"}` |
 
@@ -2505,7 +2505,7 @@ git add crates/core tests/fixtures && git commit -m "feat(core): resolve chained
 ```rust
 use reqchain_core::validate::{validate_text, Diagnostic, Severity};
 
-const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const GOOD: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 
 fn errors(diags: &[Diagnostic]) -> Vec<String> {
     diags.iter().filter(|d| d.severity == Severity::Error).map(|d| d.message.clone()).collect()
@@ -2533,9 +2533,9 @@ fn reports_a_chained_auth_pointing_at_a_missing_endpoint() {
 
 #[test]
 fn reports_an_unknown_variable() {
-    let bad = GOOD.replace("{{documento}}", "{{documentoo}}");
+    let bad = GOOD.replace("{{person_id}}", "{{person_ido}}");
     let msgs = errors(&validate_text(&bad));
-    assert!(msgs.iter().any(|m| m.contains("documentoo")), "got: {msgs:?}");
+    assert!(msgs.iter().any(|m| m.contains("person_ido")), "got: {msgs:?}");
 }
 
 #[test]
@@ -2851,7 +2851,7 @@ git add crates/core schema && git commit -m "feat(core): validate API files with
 ```rust
 use std::process::Command;
 
-const GOOD: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const GOOD: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 
 fn bin() -> Command { Command::new(env!("CARGO_BIN_EXE_reqchain")) }
 
@@ -2869,8 +2869,8 @@ fn list_prints_apis_and_endpoints() {
     let out = bin().arg("list").env("REQCHAIN_DIR", dir.path()).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success());
-    assert!(text.contains("ceibal-gateway-test"));
-    assert!(text.contains("consultaReparacion"));
+    assert!(text.contains("example-gateway-test"));
+    assert!(text.contains("repairQuery"));
 }
 
 #[test]
@@ -2906,7 +2906,7 @@ fn validate_accepts_an_explicit_file_path() {
 fn unknown_endpoint_is_a_usage_error() {
     let dir = workspace_with(&[("a.json", GOOD)]);
     let out = bin()
-        .args(["run", "ceibal-gateway-test", "ghost"])
+        .args(["run", "example-gateway-test", "ghost"])
         .env("REQCHAIN_DIR", dir.path())
         .output()
         .unwrap();
@@ -3128,12 +3128,12 @@ git add crates/cli && git commit -m "feat(cli): add list, run and validate comma
 
 **Files:**
 - Create: `SPEC.md`, `README.md`
-- Create: `tests/fixtures/odilo.json`
+- Create: `tests/fixtures/library.json`
 - Test: `crates/core/tests/spec_examples.rs`
 
 **Interfaces:**
 - Consumes: `validate`.
-- Produces: the agent-facing documentation, plus `tests/fixtures/odilo.json` (spec §14 case 2).
+- Produces: the agent-facing documentation, plus `tests/fixtures/library.json` (spec §14 case 2).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3175,8 +3175,8 @@ fn every_spec_example_validates() {
 }
 
 #[test]
-fn the_odilo_fixture_validates() {
-    let errors: Vec<_> = validate_text(include_str!("../../../tests/fixtures/odilo.json"))
+fn the_library_fixture_validates() {
+    let errors: Vec<_> = validate_text(include_str!("../../../tests/fixtures/library.json"))
         .into_iter()
         .filter(|d| d.severity == Severity::Error)
         .collect();
@@ -3189,13 +3189,13 @@ fn the_odilo_fixture_validates() {
 Run: `cargo test -p reqchain-core --test spec_examples`
 Expected: FAIL — `SPEC.md` does not exist.
 
-- [ ] **Step 3: Write `tests/fixtures/odilo.json`**
+- [ ] **Step 3: Write `tests/fixtures/library.json`**
 
-`id` `odilo`, `name` `Odilo (test)`, `baseUrl` `https://api.test-ceibal.edu.uy`, one
-environment `test` with `documento: "12345678"`, API-level `auth` `{"type":"none"}`, and
-one endpoint `odilo-user`: `GET /odilo/user`, headers
-`{"token": "{{secret:API_TOKEN}}", "user": "{{documento}}"}`, auth
-`{"type":"computed","name":"hash","expression":"md5(now(\"YYYYMMDD\") + {{documento}})"}`.
+`id` `library`, `name` `Library (test)`, `baseUrl` `https://api.example.com`, one
+environment `test` with `person_id: "12345678"`, API-level `auth` `{"type":"none"}`, and
+one endpoint `library-user`: `GET /library/user`, headers
+`{"token": "{{secret:API_TOKEN}}", "user": "{{person_id}}"}`, auth
+`{"type":"computed","name":"hash","expression":"md5(now(\"YYYYMMDD\") + {{person_id}})"}`.
 
 - [ ] **Step 4: Write `SPEC.md`**
 
@@ -3203,8 +3203,8 @@ Self-contained, written for an agent with no other context. Sections, in this or
 
 1. **What this format is** — one paragraph; where files live (`$REQCHAIN_DIR/workspace/apis/<id>.json`, default `~/.config/reqchain`).
 2. **Rules** — one API per file; the file name matches `id`; `schemaVersion: 1`; 2-space indent; trailing newline; never write a credential into the file, reference it as `{{secret:NAME}}`; run `reqchain validate <file>` after writing.
-3. **Complete example 1** — the exact content of `tests/fixtures/ceibal-gateway-test.json` in a ```json block, with a sentence explaining each block.
-4. **Complete example 2** — the exact content of `tests/fixtures/odilo.json` in a ```json block (the computed-header case).
+3. **Complete example 1** — the exact content of `tests/fixtures/example-gateway-test.json` in a ```json block, with a sentence explaining each block.
+4. **Complete example 2** — the exact content of `tests/fixtures/library.json` in a ```json block (the computed-header case).
 5. **Field reference** — one table per object (API, Environment, Endpoint, each `body` variant, each `auth` variant, `extract`, `ttl`, `inject`); columns: field, type, required, meaning.
 6. **Variables** — `{{var}}` and `{{secret:NAME}}`, precedence endpoint → active environment → API, and that an unknown variable fails before anything is sent.
 7. **Expression language** — the grammar, the five functions, the `now` format tokens, and that nothing else is permitted.
@@ -3251,8 +3251,8 @@ use std::process::Command;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const GATEWAY: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
-const ODILO: &str = include_str!("../../../tests/fixtures/odilo.json");
+const GATEWAY: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
+const LIBRARY: &str = include_str!("../../../tests/fixtures/library.json");
 
 fn workspace(files: &[(&str, String)], store: serde_json::Value) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -3263,7 +3263,7 @@ fn workspace(files: &[(&str, String)], store: serde_json::Value) -> tempfile::Te
     dir
 }
 
-/// Spec §14 case 1: Send on consultaReparacion without having run `token` first.
+/// Spec §14 case 1: Send on repairQuery without having run `token` first.
 #[tokio::test]
 async fn chained_endpoint_runs_without_calling_token_first() {
     let server = MockServer::start().await;
@@ -3275,20 +3275,20 @@ async fn chained_endpoint_runs_without_calling_token_first() {
             "expires_in": 3600
         })))
         .mount(&server).await;
-    Mock::given(method("POST")).and(path("/consultareparacion/1.0"))
+    Mock::given(method("POST")).and(path("/repairs/1.0"))
         .and(header("authorization", "Bearer live-token"))
         .and(body_string_contains("12345678"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"Reparaciones": []})))
         .mount(&server).await;
 
-    let api = GATEWAY.replace("https://api-manager.test-ceibal.edu.uy", &server.uri());
+    let api = GATEWAY.replace("https://api-manager.example.com", &server.uri());
     let dir = workspace(
         &[("gateway.json", api)],
         serde_json::json!({"GW_USER": "alice", "GW_PASS": "hunter2"}),
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_reqchain"))
-        .args(["run", "ceibal-gateway-test", "consultaReparacion", "--env", "test"])
+        .args(["run", "example-gateway-test", "repairQuery", "--env", "test"])
         .env("REQCHAIN_DIR", dir.path())
         .output()
         .unwrap();
@@ -3306,18 +3306,18 @@ async fn computed_header_endpoint_runs() {
     let server = MockServer::start().await;
     let today = chrono::Local::now().format("%Y%m%d").to_string();
     let expected_hash = format!("{:x}", md5::compute(format!("{today}12345678").as_bytes()));
-    Mock::given(method("GET")).and(path("/odilo/user"))
+    Mock::given(method("GET")).and(path("/library/user"))
         .and(header("user", "12345678"))
         .and(header("hash", expected_hash.as_str()))
         .and(header("token", "api-token-value"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"user": "ok"})))
         .mount(&server).await;
 
-    let api = ODILO.replace("https://api.test-ceibal.edu.uy", &server.uri());
-    let dir = workspace(&[("odilo.json", api)], serde_json::json!({"API_TOKEN": "api-token-value"}));
+    let api = LIBRARY.replace("https://api.example.com", &server.uri());
+    let dir = workspace(&[("library.json", api)], serde_json::json!({"API_TOKEN": "api-token-value"}));
 
     let out = Command::new(env!("CARGO_BIN_EXE_reqchain"))
-        .args(["run", "odilo", "odilo-user", "--env", "test"])
+        .args(["run", "library", "library-user", "--env", "test"])
         .env("REQCHAIN_DIR", dir.path())
         .output()
         .unwrap();
@@ -3333,17 +3333,17 @@ async fn printed_command_hides_secret_values() {
             "expires_in": 3600
         })))
         .mount(&server).await;
-    Mock::given(method("POST")).and(path("/consultareparacion/1.0"))
+    Mock::given(method("POST")).and(path("/repairs/1.0"))
         .respond_with(ResponseTemplate::new(200)).mount(&server).await;
 
-    let api = GATEWAY.replace("https://api-manager.test-ceibal.edu.uy", &server.uri());
+    let api = GATEWAY.replace("https://api-manager.example.com", &server.uri());
     let dir = workspace(
         &[("gateway.json", api)],
         serde_json::json!({"GW_USER": "alice", "GW_PASS": "hunter2"}),
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_reqchain"))
-        .args(["run", "ceibal-gateway-test", "consultaReparacion", "--env", "test", "--print-command"])
+        .args(["run", "example-gateway-test", "repairQuery", "--env", "test", "--print-command"])
         .env("REQCHAIN_DIR", dir.path())
         .output()
         .unwrap();
@@ -3399,7 +3399,7 @@ git add crates tests && git commit -m "test: add end-to-end acceptance for both 
 
 - `cargo test --workspace` green and `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - `reqchain validate` accepts both acceptance fixtures and rejects each broken variant with a message naming the problem.
-- `reqchain run ceibal-gateway-test consultaReparacion --env test` fetches, caches, injects and refreshes the token against the mock, and reports the auth step.
+- `reqchain run example-gateway-test repairQuery --env test` fetches, caches, injects and refreshes the token against the mock, and reports the auth step.
 - `SPEC.md`'s examples are checked by a test, so the document cannot drift from the code.
 
 Phase 2 (Tauri UI) and phase 3 (`.deb` packaging) get their own plans, written once this

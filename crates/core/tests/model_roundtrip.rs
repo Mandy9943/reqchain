@@ -1,11 +1,11 @@
 use reqchain_core::model::Api;
 
-const FIXTURE: &str = include_str!("../../../tests/fixtures/ceibal-gateway-test.json");
+const FIXTURE: &str = include_str!("../../../tests/fixtures/example-gateway-test.json");
 
 #[test]
 fn parses_and_reserializes_byte_identically() {
     let api = Api::from_json(FIXTURE).expect("fixture must parse");
-    assert_eq!(api.id, "ceibal-gateway-test");
+    assert_eq!(api.id, "example-gateway-test");
     assert_eq!(api.endpoints.len(), 2);
     assert_eq!(api.to_json_string(), FIXTURE);
 }

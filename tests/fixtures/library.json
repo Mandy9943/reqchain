@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "id": "odilo",
-  "name": "Odilo (test)",
-  "baseUrl": "https://api.test-ceibal.edu.uy",
+  "id": "library",
+  "name": "Library (test)",
+  "baseUrl": "https://api.example.com",
   "variables": {},
   "environments": [
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -17,20 +17,20 @@
   },
   "endpoints": [
     {
-      "id": "odilo-user",
-      "name": "Odilo User",
+      "id": "library-user",
+      "name": "Library User",
       "method": "GET",
-      "path": "/odilo/user",
+      "path": "/library/user",
       "headers": {
         "token": "{{secret:API_TOKEN}}",
-        "user": "{{documento}}"
+        "user": "{{person_id}}"
       },
       "query": {},
       "variables": {},
       "auth": {
         "type": "computed",
         "name": "hash",
-        "expression": "md5(now(\"YYYYMMDD\") + {{documento}})"
+        "expression": "md5(now(\"YYYYMMDD\") + {{person_id}})"
       }
     }
   ]

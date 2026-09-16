@@ -8,7 +8,7 @@
     {
       "name": "test",
       "variables": {
-        "documento": "12345678"
+        "person_id": "12345678"
       }
     }
   ],
@@ -22,7 +22,7 @@
       "method": "POST",
       "path": "/echo/1.0",
       "headers": {
-        "x-doc": "{{documento}}"
+        "x-doc": "{{person_id}}"
       },
       "query": {
         "trace": "on"
@@ -34,25 +34,25 @@
       "body": {
         "type": "json",
         "content": {
-          "doc": "{{documento}}"
+          "doc": "{{person_id}}"
         }
       }
     },
     {
-      "id": "odilo",
-      "name": "Odilo user",
+      "id": "library",
+      "name": "Library user",
       "method": "GET",
-      "path": "/odilo/user",
+      "path": "/library/user",
       "headers": {
         "token": "{{secret:API_TOKEN}}",
-        "user": "{{documento}}"
+        "user": "{{person_id}}"
       },
       "query": {},
       "variables": {},
       "auth": {
         "type": "computed",
         "name": "hash",
-        "expression": "md5(now(\"YYYYMMDD\") + {{documento}})"
+        "expression": "md5(now(\"YYYYMMDD\") + {{person_id}})"
       }
     }
   ]
