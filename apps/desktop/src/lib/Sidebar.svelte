@@ -77,6 +77,15 @@
       newApiError = `An API with id "${id}" already exists.`;
       return;
     }
+    // The collision check above reads the workspace as it is right now, but a
+    // save or a delete already in flight for this id has not landed there yet:
+    // a slug that collides with an API being deleted at this instant would
+    // pass the check, and the delete would then remove the file we just wrote.
+    // Every other write path consults this; so does this one.
+    if (!canWriteApiDoc(id)) {
+      newApiError = `"${id}" is busy — a save or delete for it is still in flight.`;
+      return;
+    }
     newApiBusy = true;
     newApiError = null;
     try {
