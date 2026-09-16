@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Sidebar from "./lib/Sidebar.svelte";
+  import RequestPanel from "./lib/RequestPanel.svelte";
   import { reload, ui } from "./lib/state.svelte";
 
   onMount(() => {
@@ -12,8 +13,7 @@
   <Sidebar />
 
   <section class="panel request-panel">
-    <!-- Task 8 fills this in: request editor for the selected endpoint. -->
-    <p class="placeholder">Request panel (task 8)</p>
+    <RequestPanel />
   </section>
 
   <section class="panel response-panel">
