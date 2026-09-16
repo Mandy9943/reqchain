@@ -8,37 +8,53 @@ use std::time::{Duration, Instant};
 
 pub const DEBOUNCE: Duration = Duration::from_millis(200);
 
-/// Holds the notify watcher and the debounce thread. Dropping it stops both.
+/// Holds the notify watcher; dropping it stops watching.
+///
+/// There is no explicit stop signal: dropping `_inner` drops the notify
+/// event closure, which owns the debounce thread's `events_tx` sender. The
+/// thread's blocking `recv_timeout` then observes `Disconnected` and exits
+/// immediately. This relies on `notify`'s `Drop` impl tearing down its
+/// platform watcher (and thus the closure) synchronously before returning —
+/// re-check this if `notify` is upgraded.
 pub struct Watcher {
     _inner: RecommendedWatcher,
-    _stop: mpsc::Sender<()>,
 }
 
 pub fn watch(paths: &Paths, on_change: impl Fn() + Send + 'static) -> notify::Result<Watcher> {
     let dir = paths.apis_dir();
-    std::fs::create_dir_all(&dir).ok();
+    match std::fs::create_dir_all(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
 
     let (events_tx, events_rx) = mpsc::channel::<()>();
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let mut inner = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res {
-            if matches!(
-                event.kind,
-                notify::EventKind::Create(_)
-                    | notify::EventKind::Modify(_)
-                    | notify::EventKind::Remove(_)
-            ) {
-                let _ = events_tx.send(());
+        match res {
+            Ok(event) => {
+                if matches!(
+                    event.kind,
+                    notify::EventKind::Create(_)
+                        | notify::EventKind::Modify(_)
+                        | notify::EventKind::Remove(_)
+                ) {
+                    let _ = events_tx.send(());
+                }
+            }
+            // A dead watch (descriptor exhaustion, permission revoked, ...)
+            // must not look like a quiet workspace: there is no channel back
+            // to the caller here, so surface it the same way the rest of the
+            // app reports unexpected I/O failures. Never treat an error as a
+            // change.
+            Err(e) => {
+                eprintln!("reqchain: file watching error: {e}");
             }
         }
     })?;
     inner.watch(&dir, RecursiveMode::Recursive)?;
 
     std::thread::spawn(move || loop {
-        if stop_rx.try_recv().is_ok() {
-            return;
-        }
         match events_rx.recv_timeout(DEBOUNCE) {
             Ok(()) => {
                 // A burst started. Drain it, but only up to a fixed deadline
@@ -60,9 +76,6 @@ pub fn watch(paths: &Paths, on_change: impl Fn() + Send + 'static) -> notify::Re
                         Err(mpsc::RecvTimeoutError::Disconnected) => return,
                     }
                 }
-                if stop_rx.try_recv().is_ok() {
-                    return;
-                }
                 on_change();
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -70,8 +83,5 @@ pub fn watch(paths: &Paths, on_change: impl Fn() + Send + 'static) -> notify::Re
         }
     });
 
-    Ok(Watcher {
-        _inner: inner,
-        _stop: stop_tx,
-    })
+    Ok(Watcher { _inner: inner })
 }
