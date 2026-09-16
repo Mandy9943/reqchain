@@ -131,14 +131,20 @@ reqchain run odilo odilo-user --env test --print-command
 ```
 
 Both examples point at Ceibal test hosts and need real credentials in the secret store to
-return anything; `validate`, `list` and `--print-command` work without network access.
+return anything; `validate` and `list` work without network access.
+
+`--print-command` never sends the endpoint's own request — a `DELETE` endpoint printed this
+way is not deleted. It does still call the **auth** endpoint when the endpoint uses chained
+auth, because the token does not exist until that call has been made; so for a chained
+endpoint it needs to reach the auth host, and for every other endpoint it needs no network
+access at all.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `reqchain list` | List every API in the workspace and its endpoints. |
-| `reqchain run <api> <endpoint> [--env NAME] [--print-command]` | Run an endpoint, resolving its auth chain. |
+| `reqchain run <api> <endpoint> [--env NAME] [--print-command]` | Run an endpoint, resolving its auth chain. With `--print-command`, print the request as `curl` instead of sending it (a chained auth still fetches its token). |
 | `reqchain validate [files...]` | Validate API files; defaults to the whole workspace. |
 
 Exit codes:

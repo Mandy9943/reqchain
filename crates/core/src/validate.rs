@@ -1,5 +1,5 @@
 use crate::expr::SUPPORTED;
-use crate::model::{Api, Auth, AuthExtract, Body, Endpoint};
+use crate::model::{Api, Auth, AuthExtract, AuthInject, Body, Endpoint};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -99,7 +99,28 @@ fn endpoint_texts(api: &Api, ep: &Endpoint) -> Vec<String> {
         Some(Body::Binary { path }) => texts.push(path.clone()),
         None => {}
     }
+    texts.extend(auth_texts(api, ep));
     texts
+}
+
+/// Every string an endpoint's RESOLVED auth can carry a `{{var}}` in. Without
+/// these, a typo in a bearer token, a basic password or a computed expression
+/// validates clean and only fails when the request is built.
+fn auth_texts(api: &Api, ep: &Endpoint) -> Vec<String> {
+    match crate::auth::resolve(api, ep) {
+        Auth::Inherit | Auth::None => Vec::new(),
+        Auth::Basic { username, password } => vec![username.clone(), password.clone()],
+        Auth::Bearer { token } => vec![token.clone()],
+        Auth::Header { headers } => headers.values().cloned().collect(),
+        Auth::Computed { expression, .. } => vec![expression.clone()],
+        // `{{value}}` is the token placeholder and is legitimate inside these
+        // templates — `known_var` already accepts it.
+        Auth::Chained { inject, .. } => match inject {
+            AuthInject::Header { template, .. }
+            | AuthInject::Query { template, .. }
+            | AuthInject::Body { template, .. } => vec![template.clone()],
+        },
+    }
 }
 
 fn check_variables(api: &Api, ep: &Endpoint, base: &str, out: &mut Vec<Diagnostic>) {
@@ -121,6 +142,17 @@ fn check_variables(api: &Api, ep: &Endpoint, base: &str, out: &mut Vec<Diagnosti
 fn check_auth(api: &Api, ep: &Endpoint, base: &str, out: &mut Vec<Diagnostic>) {
     match crate::auth::resolve(api, ep) {
         Auth::Computed { expression, .. } => {
+            for literal in string_literals(expression) {
+                if literal.contains("{{") {
+                    out.push(Diagnostic::error(
+                        format!("{base}.auth.expression"),
+                        format!(
+                            "endpoint `{}`: `{{{{...}}}}` inside the string literal \"{literal}\" is NOT interpolated — the literal text is used verbatim. Concatenate instead, e.g. `base64(\"user:\" + {{{{secret:PW}}}})`",
+                            ep.id
+                        ),
+                    ));
+                }
+            }
             for name in function_names(expression) {
                 if !SUPPORTED.contains(&name.as_str()) {
                     out.push(Diagnostic::error(
@@ -187,6 +219,20 @@ fn check_auth(api: &Api, ep: &Endpoint, base: &str, out: &mut Vec<Diagnostic>) {
         }
         _ => {}
     }
+}
+
+/// Every `"..."` literal in an expression. The grammar has no escapes: a `"` always
+/// ends the literal, so a plain toggle is exact.
+fn string_literals(expression: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = expression;
+    while let Some(open) = rest.find('"') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        out.push(after[..close].to_string());
+        rest = &after[close + 1..];
+    }
+    out
 }
 
 /// Every identifier immediately followed by `(` is a function call.

@@ -154,3 +154,129 @@ fn fixtures_satisfy_the_published_json_schema() {
         "expected at least 9 fixtures to be checked, found {checked}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Final review, finding 5: `validate` never looked inside auth, so a typo in a
+// bearer token, a basic password or a computed expression validated clean and
+// only failed at run time. Every auth-carried string is now scanned.
+// ---------------------------------------------------------------------------
+
+/// A one-endpoint API whose endpoint auth is exactly `auth_json`.
+fn api_with_auth(auth_json: &str) -> String {
+    format!(
+        r#"{{
+  "schemaVersion": 1,
+  "id": "t",
+  "name": "T",
+  "baseUrl": "https://example.test",
+  "variables": {{ "documento": "1" }},
+  "endpoints": [
+    {{
+      "id": "e",
+      "name": "E",
+      "method": "GET",
+      "path": "/x",
+      "auth": {auth_json}
+    }}
+  ]
+}}"#
+    )
+}
+
+#[test]
+fn reports_an_unknown_variable_in_a_bearer_token() {
+    let msgs = errors(&validate_text(&api_with_auth(
+        r#"{ "type": "bearer", "token": "{{typo}}" }"#,
+    )));
+    assert!(
+        msgs.iter().any(|m| m.contains("unknown variable `typo`")),
+        "got: {msgs:?}"
+    );
+}
+
+#[test]
+fn reports_an_unknown_variable_in_a_basic_password() {
+    let msgs = errors(&validate_text(&api_with_auth(
+        r#"{ "type": "basic", "username": "{{documento}}", "password": "{{typo}}" }"#,
+    )));
+    assert!(
+        msgs.iter().any(|m| m.contains("unknown variable `typo`")),
+        "got: {msgs:?}"
+    );
+}
+
+#[test]
+fn reports_an_unknown_variable_in_a_computed_expression() {
+    let msgs = errors(&validate_text(&api_with_auth(
+        r#"{ "type": "computed", "name": "hash", "expression": "md5({{typo}})" }"#,
+    )));
+    assert!(
+        msgs.iter().any(|m| m.contains("unknown variable `typo`")),
+        "got: {msgs:?}"
+    );
+}
+
+#[test]
+fn reports_an_unknown_variable_in_a_header_auth_value() {
+    let msgs = errors(&validate_text(&api_with_auth(
+        r#"{ "type": "header", "headers": { "x-k": "{{typo}}" } }"#,
+    )));
+    assert!(
+        msgs.iter().any(|m| m.contains("unknown variable `typo`")),
+        "got: {msgs:?}"
+    );
+}
+
+/// The complement: correct auth references — including `{{secret:NAME}}` and the
+/// `{{value}}` placeholder that is legitimate inside a chained inject template —
+/// must still validate clean.
+#[test]
+fn correct_auth_variable_references_still_validate() {
+    for auth in [
+        r#"{ "type": "bearer", "token": "{{secret:TOK}}" }"#,
+        r#"{ "type": "basic", "username": "{{documento}}", "password": "{{secret:PW}}" }"#,
+        r#"{ "type": "computed", "name": "hash", "expression": "md5({{documento}})" }"#,
+        r#"{ "type": "header", "headers": { "x-k": "{{documento}}" } }"#,
+    ] {
+        let msgs = errors(&validate_text(&api_with_auth(auth)));
+        assert!(msgs.is_empty(), "{auth} should be clean, got: {msgs:?}");
+    }
+    // A chained inject template legitimately uses `{{value}}`.
+    let msgs = errors(&validate_text(GOOD));
+    assert!(msgs.is_empty(), "got: {msgs:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Final review, finding 8: expression string literals do not interpolate, so
+// `base64("{{secret:pw}}")` silently encodes the literal text and produces a
+// wrong credential. The validator now reports it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reports_a_variable_inside_an_expression_string_literal() {
+    let msgs = errors(&validate_text(&api_with_auth(
+        r#"{ "type": "computed", "name": "x", "expression": "base64(\"{{secret:PW}}\")" }"#,
+    )));
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("is NOT interpolated") && m.contains("Concatenate instead")),
+        "got: {msgs:?}"
+    );
+}
+
+#[test]
+fn the_concatenating_form_of_that_expression_is_accepted() {
+    let msgs = errors(&validate_text(&api_with_auth(
+        r#"{ "type": "computed", "name": "x", "expression": "base64(\"user:\" + {{secret:PW}})" }"#,
+    )));
+    assert!(msgs.is_empty(), "got: {msgs:?}");
+}
+
+/// A string literal with no `{{` in it — such as `now`'s format — is untouched.
+#[test]
+fn a_plain_string_literal_is_not_flagged() {
+    let msgs = errors(&validate_text(&api_with_auth(
+        r#"{ "type": "computed", "name": "x", "expression": "md5(now(\"YYYYMMDD\") + {{documento}})" }"#,
+    )));
+    assert!(msgs.is_empty(), "got: {msgs:?}");
+}

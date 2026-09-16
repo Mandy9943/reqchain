@@ -35,13 +35,29 @@ pub struct EffectiveRequest {
 
 impl EffectiveRequest {
     /// Replaces every secret value with `***`, for display and shell export.
+    ///
+    /// A value that reaches the URL — a secret used in a query parameter, or a
+    /// chain token injected with `inject.into: "query"` — is stored
+    /// percent-encoded, so a literal-substring match never finds it: the secret
+    /// `p@ss/w+rd=` is in the URL as `p%40ss%2Fw%2Brd%3D`. Each value is
+    /// therefore redacted in both forms, using the same encoder `build` used.
     pub fn masked(&self, secrets: &[String]) -> EffectiveRequest {
+        let forms: Vec<String> = secrets
+            .iter()
+            .filter(|s| !s.is_empty())
+            .flat_map(|s| {
+                let encoded = urlencode(s);
+                if encoded == *s {
+                    vec![s.clone()]
+                } else {
+                    vec![s.clone(), encoded]
+                }
+            })
+            .collect();
         let mask = |s: &String| {
             let mut out = s.clone();
-            for secret in secrets {
-                if !secret.is_empty() {
-                    out = out.replace(secret.as_str(), "***")
-                }
+            for form in &forms {
+                out = out.replace(form.as_str(), "***")
             }
             out
         };

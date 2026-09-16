@@ -29,7 +29,9 @@ enum Cmd {
         endpoint: String,
         #[arg(long)]
         env: Option<String>,
-        /// Print the effective request as a shell command instead of sending it
+        /// Print the effective request as a shell command instead of sending it.
+        /// The endpoint's own request is never sent; a chained auth still calls its
+        /// auth endpoint, because the token does not exist until it does.
         #[arg(long = "print-command")]
         print_command: bool,
     },
@@ -148,6 +150,37 @@ async fn run(
     let secret_values: Vec<String> = secrets.values().cloned().collect();
     let mut executor = Executor::new(Runner::new(), TokenCache::persistent(paths), secrets);
 
+    if print_command {
+        // `--print-command` must NOT perform the endpoint's own request: it is
+        // advertised as showing the request "instead of sending it", and a
+        // DELETE endpoint printed this way must still be un-deleted afterwards.
+        // Resolving a chained auth may legitimately call the AUTH endpoint —
+        // the token does not exist until it has — and that is documented on the
+        // flag and in the README.
+        return match executor.prepare(api, endpoint_id, env).await {
+            Err(e) => {
+                let mut mask_values = secret_values;
+                mask_values.extend(executor.derived_values());
+                eprintln!("error: {}", mask_all(&e.to_string(), &mask_values));
+                let is_transport = matches!(e, RunError::Exec(ExecError::Transport(_)));
+                ExitCode::from(if is_transport { 2 } else { 1 })
+            }
+            Ok(req) => {
+                let mut mask_values = secret_values;
+                mask_values.extend(executor.derived_values());
+                if let Err(e) = executor.cache_mut().save() {
+                    eprintln!(
+                        "warning: could not save the token cache at {}: {}",
+                        paths.cache_file().display(),
+                        mask_all(&e.to_string(), &mask_values)
+                    );
+                }
+                println!("{}", shell::to_shell_command(&req.masked(&mask_values)));
+                ExitCode::SUCCESS
+            }
+        };
+    }
+
     match executor.run(api, endpoint_id, env).await {
         Err(e) => {
             // A chain error's message can legitimately embed up to 200 raw
@@ -183,11 +216,6 @@ async fn run(
                 );
             }
 
-            let masked = res.effective.masked(&mask_values);
-            if print_command {
-                println!("{}", shell::to_shell_command(&masked));
-                return ExitCode::SUCCESS;
-            }
             eprintln!("{} {}ms {}B", res.status, res.elapsed_ms, res.size_bytes);
             for step in &res.auth_trace {
                 if step.from_cache {

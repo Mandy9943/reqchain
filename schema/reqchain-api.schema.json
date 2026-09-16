@@ -330,7 +330,7 @@
           "properties": {
             "from": { "const": "body", "description": "Discriminator identifying this as a relative body-derived ttl." },
             "jsonPath": { "type": "string", "description": "A JSONPath expression selecting the relative lifetime within the response body." },
-            "unit": { "type": "string", "description": "The unit the lifetime value is expressed in; defaults to `seconds`." }
+            "unit": { "enum": ["seconds", "milliseconds"], "description": "The unit the lifetime value is expressed in; defaults to `seconds`. Only `seconds` and `milliseconds` are accepted." }
           }
         },
         {

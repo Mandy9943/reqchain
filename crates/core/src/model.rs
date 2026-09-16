@@ -174,8 +174,8 @@ pub enum AuthTtl {
     Body {
         #[serde(rename = "jsonPath")]
         json_path: String,
-        #[serde(default = "seconds_unit")]
-        unit: String,
+        #[serde(default)]
+        unit: TtlUnit,
     },
     Fixed {
         seconds: u64,
@@ -186,8 +186,14 @@ pub enum AuthTtl {
     },
 }
 
-fn seconds_unit() -> String {
-    "seconds".to_string()
+/// The only units a relative, body-derived ttl may be expressed in. Anything else
+/// is rejected at load time rather than silently read as seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TtlUnit {
+    #[default]
+    Seconds,
+    Milliseconds,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

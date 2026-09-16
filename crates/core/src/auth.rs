@@ -31,12 +31,18 @@ fn set_header(req: &mut EffectiveRequest, name: &str, value: String) {
     req.headers.push((name.to_string(), value));
 }
 
+/// Applies the endpoint's resolved static auth to `req`, and returns every
+/// credential value it set. Those values are derived from secrets rather than
+/// being secrets themselves — a `computed` header, or the base64 of a Basic
+/// credential, contains no literal secret substring — so the caller must add
+/// them to its mask list, exactly as it does for chain-derived tokens.
 pub fn apply_static(
     api: &Api,
     endpoint: &Endpoint,
     scope: &Scope,
     req: &mut EffectiveRequest,
-) -> Result<(), AuthError> {
+) -> Result<Vec<String>, AuthError> {
+    let mut applied = Vec::new();
     match resolve(api, endpoint) {
         Auth::Inherit | Auth::None => {}
         Auth::Basic { username, password } => {
@@ -45,26 +51,28 @@ pub fn apply_static(
             let encoded =
                 base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
             set_header(req, "Authorization", format!("Basic {encoded}"));
+            applied.push(encoded);
         }
         Auth::Bearer { token } => {
-            set_header(
-                req,
-                "Authorization",
-                format!("Bearer {}", scope.interpolate(token)?),
-            );
+            let value = scope.interpolate(token)?;
+            set_header(req, "Authorization", format!("Bearer {value}"));
+            applied.push(value);
         }
         Auth::Header { headers } => {
             for (k, v) in headers {
                 let value = scope.interpolate(v)?;
-                set_header(req, k, value);
+                set_header(req, k, value.clone());
+                applied.push(value);
             }
         }
         Auth::Computed { name, expression } => {
             let value = expr::eval(expression, scope)?;
-            set_header(req, name, value);
+            set_header(req, name, value.clone());
+            applied.push(value);
         }
         // Chained auth needs I/O; `chain::Executor` owns it.
         Auth::Chained { .. } => {}
     }
-    Ok(())
+    applied.retain(|v| !v.is_empty());
+    Ok(applied)
 }

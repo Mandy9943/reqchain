@@ -265,7 +265,7 @@ form concatenated with `documento`. The `token` and `user` headers are ordinary 
 | `from` | Field | Type | Required | Meaning |
 | --- | --- | --- | --- | --- |
 | `body` | `jsonPath` | string | yes | JSONPath selecting a relative lifetime in the response body. |
-| `body` | `unit` | string | no (default `seconds`) | `seconds`, or `milliseconds` to divide the value by 1000. Any other value is read as seconds. |
+| `body` | `unit` | string | no (default `seconds`) | Exactly `seconds` or `milliseconds` (which divides the value by 1000). Any other value is rejected when the file is loaded. |
 | `fixed` | `seconds` | integer ≥ 0 | yes | The token is valid for this many seconds from the moment it was fetched. |
 | `absolute` | `jsonPath` | string | yes | JSONPath selecting an RFC 3339 timestamp at which the token expires. A value that is not RFC 3339 is a run-time error. |
 
@@ -330,6 +330,10 @@ funcall := name "(" [ expr ( "," expr )* ] ")"
 - String literals have no escape sequences: a `"` always ends the literal.
 - Nesting deeper than 32 levels is an error.
 - Trailing input after a complete expression is a syntax error.
+- **`{{...}}` inside a string literal is NOT interpolated.** `base64("{{secret:PW}}")`
+  base64-encodes the eleven characters `{{secret:PW}}`, not the secret. Concatenate
+  instead: `base64("user:" + {{secret:PW}})`. The validator reports a `{{` inside a
+  string literal as an **error**.
 
 The five functions are the only ones permitted. Each takes exactly one argument; any other
 arity is an error. Any other function name is an error — reported by the validator before
@@ -427,10 +431,12 @@ apis/gw.json: error: chained auth of `business` points at endpoint `nonexistent`
 ```
 
 What is an **error**: malformed JSON, an unknown field, a `schemaVersion` other than 1, a
-duplicate endpoint id, a reference to an undefined variable, an unknown function in a
-computed expression, a chained `source.endpoint` that does not exist, an invalid
-`jsonPath` in `auth.extract` (a `ttl` jsonPath is only checked at run time), an `xpath`
-extract, an auth cycle, and a chain deeper than 5.
+`ttl.unit` other than `seconds` or `milliseconds`, a duplicate endpoint id, a reference to
+an undefined variable — including one inside an auth `token`, `username`, `password`,
+`expression` or `inject.template` — an unknown function in a computed expression, a `{{`
+inside a string literal of a computed expression, a chained `source.endpoint` that does not
+exist, an invalid `jsonPath` in `auth.extract` (a `ttl` jsonPath is only checked at run
+time), an `xpath` extract, an auth cycle, and a chain deeper than 5.
 
 What is a **warning**: relying on the default chained-auth `extract`, and relying on the
 default chained-auth `ttl`.

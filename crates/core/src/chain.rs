@@ -1,7 +1,7 @@
 use crate::auth::{self, AuthError};
 use crate::cache::{now_unix, TokenCache};
 use crate::exec::{AuthStep, ExecError, RunResult, Runner};
-use crate::model::{Api, Auth, AuthExtract, AuthInject, AuthTtl};
+use crate::model::{Api, Auth, AuthExtract, AuthInject, AuthTtl, TtlUnit};
 use crate::request::{self, urlencode, BuildError, EffectiveBody, EffectiveRequest};
 use crate::secrets::Secrets;
 use crate::vars::Scope;
@@ -92,7 +92,9 @@ impl Executor {
         })?;
         let scope = Scope::new(api, endpoint, env, &self.secrets);
         let mut req = request::build(api, endpoint, &scope)?;
-        auth::apply_static(api, endpoint, &scope, &mut req)?;
+        for value in auth::apply_static(api, endpoint, &scope, &mut req)? {
+            self.remember(&value);
+        }
 
         let resolved = auth::resolve(api, endpoint).clone();
         let Auth::Chained {
@@ -108,8 +110,11 @@ impl Executor {
             return Ok(res);
         };
 
-        let fingerprint = env.unwrap_or("").to_string();
-        let key = TokenCache::key(&api.id, &resolved, &fingerprint);
+        let key = TokenCache::key(
+            &api.id,
+            &resolved,
+            &self.scope_fingerprint(api, &source.endpoint, env),
+        );
 
         let (value, mut trace) = self
             .token(api, &source.endpoint, env, &extract, &ttl, &key, visited)
@@ -144,6 +149,103 @@ impl Executor {
 
         res.auth_trace = trace;
         Ok(res)
+    }
+
+    /// Builds the effective request for `endpoint_id` exactly as [`Executor::run`]
+    /// would — interpolating variables, applying static auth and resolving the auth
+    /// chain — but never sends it. Resolving a chain may still perform the AUTH
+    /// request: a chained token does not exist until its source endpoint has been
+    /// called, so it cannot be shown without one. The endpoint's OWN request is
+    /// never sent.
+    pub async fn prepare(
+        &mut self,
+        api: &Api,
+        endpoint_id: &str,
+        env: Option<&str>,
+    ) -> Result<EffectiveRequest, RunError> {
+        let endpoint = api.endpoint(endpoint_id).ok_or_else(|| RunError::Chain {
+            message: format!("endpoint `{endpoint_id}` not found in API `{}`", api.id),
+        })?;
+        let scope = Scope::new(api, endpoint, env, &self.secrets);
+        let mut req = request::build(api, endpoint, &scope)?;
+        for value in auth::apply_static(api, endpoint, &scope, &mut req)? {
+            self.remember(&value);
+        }
+
+        let resolved = auth::resolve(api, endpoint).clone();
+        let Auth::Chained {
+            source,
+            extract,
+            ttl,
+            inject,
+            ..
+        } = resolved.clone()
+        else {
+            return Ok(req);
+        };
+
+        let key = TokenCache::key(
+            &api.id,
+            &resolved,
+            &self.scope_fingerprint(api, &source.endpoint, env),
+        );
+        let mut visited = vec![endpoint_id.to_string()];
+        let (value, _trace) = self
+            .token(
+                api,
+                &source.endpoint,
+                env,
+                &extract,
+                &ttl,
+                &key,
+                &mut visited,
+            )
+            .await?;
+        inject_value(&mut req, &inject, &value)?;
+        Ok(req)
+    }
+
+    /// The part of a cache key that is not the auth *definition*: the active
+    /// environment plus a digest of the credential values that definition actually
+    /// resolves to along the chain it walks. Hashing the resolved credentials — and
+    /// only their hash, which is all that ever reaches the cache file — makes
+    /// rotating a secret produce a different key, so the stale token is not reused
+    /// (design spec §7).
+    fn scope_fingerprint(&self, api: &Api, source_id: &str, env: Option<&str>) -> String {
+        use sha2::Digest;
+        let mut material = String::new();
+        let mut current = source_id.to_string();
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..MAX_DEPTH {
+            if seen.iter().any(|v| v == &current) {
+                break;
+            }
+            seen.push(current.clone());
+            let Some(ep) = api.endpoint(&current) else {
+                break;
+            };
+            let scope = Scope::new(api, ep, env, &self.secrets);
+            let mut probe = EffectiveRequest {
+                method: ep.method,
+                url: String::new(),
+                headers: Vec::new(),
+                body: None,
+            };
+            // A credential that cannot be resolved (an unknown secret, say) is not a
+            // fingerprinting concern: the run itself is about to fail on it.
+            if let Ok(values) = auth::apply_static(api, ep, &scope, &mut probe) {
+                for v in values {
+                    material.push_str(&v);
+                    material.push('\u{0}');
+                }
+            }
+            match auth::resolve(api, ep) {
+                Auth::Chained { source, .. } => current = source.endpoint.clone(),
+                _ => break,
+            }
+        }
+        let digest = sha2::Sha256::digest(material.as_bytes());
+        format!("{}\u{0}{digest:x}", env.unwrap_or(""))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -340,7 +442,7 @@ fn apply_regex(input: &str, regex: Option<&str>) -> Result<String, RunError> {
 fn compute_expiry(body: &str, ttl: &Option<AuthTtl>) -> Result<Option<u64>, RunError> {
     let ttl = ttl.clone().unwrap_or(AuthTtl::Body {
         json_path: "$.expires_in".into(),
-        unit: "seconds".into(),
+        unit: TtlUnit::Seconds,
     });
     match ttl {
         AuthTtl::Fixed { seconds } => Ok(Some(now_unix() + seconds)),
@@ -357,7 +459,10 @@ fn compute_expiry(body: &str, ttl: &Option<AuthTtl>) -> Result<Option<u64>, RunE
             else {
                 return Ok(None);
             };
-            let seconds = if unit == "milliseconds" { n / 1000 } else { n };
+            let seconds = match unit {
+                TtlUnit::Milliseconds => n / 1000,
+                TtlUnit::Seconds => n,
+            };
             Ok(Some(now_unix() + seconds))
         }
         AuthTtl::Absolute { json_path } => {
