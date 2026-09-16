@@ -7,20 +7,23 @@
   let previewUrl = $state<string | null>(null);
   let previewError = $state<string | null>(null);
   let saveError = $state<string | null>(null);
-  let saving = $state(false);
+  // apiId -> in-flight save. Per-apiId (not a single flag) so saving API A
+  // never blocks — or gets clobbered by — a save of API B started while A
+  // is still pending; a second save of the *same* apiId is refused instead.
+  let savingIds = $state<Record<string, boolean>>({});
   // apiId -> text that was last successfully written to disk by us. Used to
   // adopt the canonical (re-serialized) text once the post-save reload comes
   // back, but only if the user hasn't kept typing in the meantime.
   let cleanSnapshot: Record<string, string> = {};
-
-  function parsesAsJson(text: string): boolean {
-    try {
-      JSON.parse(text);
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  // Bumped after a save succeeds for whatever API is selected at that
+  // moment, to re-trigger the preview effect below (its own dependencies
+  // don't otherwise change on save).
+  let previewGeneration = $state(0);
+  // Monotonic counters so a stale `lint`/`preview_endpoint` response — one
+  // that was in flight when the selection, environment or buffer moved on —
+  // is dropped instead of overwriting state for whatever is on screen now.
+  let lintSeq = 0;
+  let previewSeq = 0;
 
   const api = $derived(selectedApi());
   const endpoint = $derived(selectedEndpoint());
@@ -28,6 +31,7 @@
   const dirty = $derived(
     api !== undefined && bufferText !== undefined && bufferText !== api.text,
   );
+  const saving = $derived(api ? !!savingIds[api.id] : false);
 
   // Seed the buffer for a newly selected API, without ever clobbering a
   // buffer the user (or task 10's hot-reload logic) already owns.
@@ -55,18 +59,31 @@
     }
   });
 
-  // Diagnostics strip: relint on every buffer change, debounced.
+  // Selection changed: drop feedback that belonged to whatever was
+  // previously on screen so it can't be shown against an unrelated
+  // endpoint. `lint`/preview effects below repopulate diagnostics/URL for
+  // the new selection on their own.
   $effect(() => {
-    const current = api;
+    void ui.selected;
+    saveError = null;
+    diagnostics = [];
+  });
+
+  // Diagnostics strip: relint on every buffer change, debounced. Guarded by
+  // `lintSeq` against a stale response (from a previous keystroke, or a
+  // since-abandoned API/selection) landing after a newer one already did.
+  $effect(() => {
     const text = bufferText;
-    if (!current || text === undefined) {
-      diagnostics = [];
+    if (!api || text === undefined) {
       return;
     }
     const handle = setTimeout(() => {
+      const seq = ++lintSeq;
       void lint(text)
         .then((d) => {
-          diagnostics = d;
+          if (seq === lintSeq) {
+            diagnostics = d;
+          }
         })
         .catch(() => {
           // lint never rejects per the IPC surface; ignore defensively.
@@ -75,34 +92,39 @@
     return () => clearTimeout(handle);
   });
 
-  // Effective URL preview: debounced, and skipped while the buffer holds
-  // unsaved changes that don't even parse (nothing sane to preview yet, and
-  // this avoids hammering a real chained-auth endpoint on every keystroke of
-  // a broken document).
+  // Effective URL preview. `preview_endpoint` only ever reads the
+  // *persisted* file, so its result cannot change from unsaved keystrokes —
+  // firing it on every valid-JSON edit would buy nothing and could spam a
+  // real chained-auth token endpoint with half-finished edits. So this only
+  // fires on: selection change, environment change for the selected API,
+  // and a successful save (via `previewGeneration`). Debounced 300 ms to
+  // coalesce rapid selection/environment changes; `previewSeq` drops a
+  // response that's no longer for the current selection/environment.
   $effect(() => {
     const sel = ui.selected;
-    const current = api;
-    if (!sel || !current) {
+    if (!sel) {
       previewUrl = null;
       previewError = null;
       return;
     }
-    const text = bufferText;
-    const hasUnparsedEdits =
-      text !== undefined && text !== current.text && !parsesAsJson(text);
-    if (hasUnparsedEdits) {
-      return;
-    }
-    const env = ui.env[current.id] ?? null;
+    const apiId = sel.apiId;
+    const endpointId = sel.endpointId;
+    const env = ui.env[apiId] ?? null;
+    void previewGeneration;
     const handle = setTimeout(() => {
-      previewEndpoint(current.id, sel.endpointId, env)
+      const seq = ++previewSeq;
+      previewEndpoint(apiId, endpointId, env)
         .then((effective) => {
-          previewUrl = effective.url;
-          previewError = null;
+          if (seq === previewSeq) {
+            previewUrl = effective.url;
+            previewError = null;
+          }
         })
         .catch((e) => {
-          previewUrl = null;
-          previewError = e instanceof Error ? e.message : String(e);
+          if (seq === previewSeq) {
+            previewUrl = null;
+            previewError = e instanceof Error ? e.message : String(e);
+          }
         });
     }, 300);
     return () => clearTimeout(handle);
@@ -115,22 +137,41 @@
   }
 
   async function handleSave(): Promise<void> {
-    if (!api || bufferText === undefined || !dirty) return;
-    const text = bufferText;
-    saving = true;
-    saveError = null;
+    const current = api;
+    if (!current) return;
+    // Capture everything off the reactive graph now — the selection (and
+    // hence `api`) can change while `saveApi` is in flight, and the
+    // continuation below must keep acting on the API it was actually asked
+    // to save, never on whatever happens to be selected when it resolves.
+    const apiId = current.id;
+    const savedApiText = current.text;
+    const text = ui.buffers[apiId];
+    if (text === undefined || text === savedApiText) return;
+    if (savingIds[apiId]) return; // a save for this API is already in flight
+
+    const stillSelected = () => selectedApi()?.id === apiId;
+    savingIds[apiId] = true;
+    if (stillSelected()) saveError = null;
+
     try {
-      const result = await saveApi(api.id, text);
-      diagnostics = result;
+      const result = await saveApi(apiId, text);
+      if (stillSelected()) {
+        diagnostics = result;
+      }
       const hasError = result.some((d) => d.severity === "error");
       if (!hasError) {
-        ui.buffers[api.id] = text;
-        cleanSnapshot[api.id] = text;
+        ui.buffers[apiId] = text;
+        cleanSnapshot[apiId] = text;
+        if (ui.selected?.apiId === apiId) {
+          previewGeneration++;
+        }
       }
     } catch (e) {
-      saveError = e instanceof Error ? e.message : String(e);
+      if (stillSelected()) {
+        saveError = e instanceof Error ? e.message : String(e);
+      }
     } finally {
-      saving = false;
+      savingIds[apiId] = false;
     }
   }
 </script>

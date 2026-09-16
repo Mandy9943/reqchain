@@ -28,9 +28,17 @@ export async function reload(): Promise<void> {
     ui.workspace = workspace;
     ui.error = null;
     // Default each API's environment selection to its first environment,
-    // without clobbering a choice the user already made.
+    // without clobbering a choice the user already made — unless that
+    // choice no longer names a real environment (e.g. it was removed from
+    // the file), in which case it would otherwise linger as a value with no
+    // matching <option>.
     for (const api of workspace.apis) {
-      if (!(api.id in ui.env)) {
+      const current = ui.env[api.id];
+      const stale =
+        current !== undefined &&
+        current !== null &&
+        !api.environments.includes(current);
+      if (current === undefined || stale) {
         ui.env[api.id] = api.environments[0] ?? null;
       }
     }

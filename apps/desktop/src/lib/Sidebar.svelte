@@ -33,6 +33,7 @@
     class="search"
     type="search"
     placeholder="Search endpoints..."
+    aria-label="Search endpoints"
     bind:value={ui.search}
   />
 
