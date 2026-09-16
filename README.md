@@ -41,6 +41,23 @@ To run the test suite:
 cargo test --workspace
 ```
 
+## Desktop app (development)
+
+The desktop app is a Tauri 2 + Svelte 5 shell over `reqchain-core`. In addition to the
+Rust prerequisites above, it needs the system WebView dependencies. On Debian/Ubuntu:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+Then, from the repo root:
+
+```sh
+pnpm --dir apps/desktop install
+pnpm --dir apps/desktop tauri dev
+```
+
 ## Directory layout
 
 Everything `reqchain` reads and writes lives under `$REQCHAIN_DIR`, which defaults to
