@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "id": "ceibal-gateway-test",
+  "name": "Ceibal Gateway (test)",
+  "baseUrl": "https://api-manager.test-ceibal.edu.uy",
+  "variables": {},
+  "environments": [
+    {
+      "name": "test",
+      "variables": {
+        "documento": "12345678"
+      }
+    }
+  ],
+  "auth": {
+    "type": "none"
+  },
+  "endpoints": [
+    {
+      "id": "token",
+      "name": "Token",
+      "method": "POST",
+      "path": "/token",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "basic",
+        "username": "{{secret:GW_USER}}",
+        "password": "{{secret:GW_PASS}}"
+      },
+      "body": {
+        "type": "form",
+        "fields": {
+          "grant_type": "client_credentials"
+        }
+      }
+    },
+    {
+      "id": "consultaReparacion",
+      "name": "Consulta Reparacion",
+      "method": "POST",
+      "path": "/consultareparacion/1.0",
+      "headers": {},
+      "query": {},
+      "variables": {},
+      "auth": {
+        "type": "chained",
+        "source": {
+          "endpoint": "token"
+        },
+        "extract": {
+          "from": "body",
+          "jsonPath": "$.access_token"
+        },
+        "ttl": {
+          "from": "body",
+          "jsonPath": "$.expires_in",
+          "unit": "seconds"
+        },
+        "inject": {
+          "into": "header",
+          "name": "Authorization",
+          "template": "Bearer {{value}}"
+        },
+        "retryOn": [
+          401,
+          403
+        ]
+      },
+      "body": {
+        "type": "json",
+        "content": {
+          "SDTConsultaReparacion_In": {
+            "PersonaDocumento": "{{documento}}"
+          }
+        }
+      }
+    }
+  ]
+}

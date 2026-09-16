@@ -1,0 +1,6 @@
+[package]
+name = "reqchain-cli"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
