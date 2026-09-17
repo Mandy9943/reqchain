@@ -143,3 +143,34 @@ export async function history(
 ): Promise<HistoryEntry[]> {
   return invoke("history", { apiId, endpointId });
 }
+
+// --- Secrets ---------------------------------------------------------------
+// Security contract (spec §17.3, task-7 brief): `listSecrets` returns NAMES
+// ONLY, never a value. `revealSecret` is the ONLY function in the whole
+// frontend that may receive a stored credential from the backend — it must
+// be called only from the secrets screen's own explicit per-entry "Show"
+// action, its result kept in that component's own local state (never `ui`),
+// and never passed to any other component or logged.
+
+/** Names only, sorted. Never carries a value — see `reveal_secret`. */
+export async function listSecrets(): Promise<string[]> {
+  return invoke("list_secrets");
+}
+
+/** Creates or replaces a secret. */
+export async function setSecret(name: string, value: string): Promise<void> {
+  return invoke("set_secret", { name, value });
+}
+
+export async function deleteSecret(name: string): Promise<void> {
+  return invoke("delete_secret", { name });
+}
+
+/**
+ * Returns the ONE stored value for `name`. Do not call this from anywhere
+ * but the secrets screen's own "Show" action, and do not store its result
+ * anywhere but that action's own local, component-scoped state.
+ */
+export async function revealSecret(name: string): Promise<string> {
+  return invoke("reveal_secret", { name });
+}

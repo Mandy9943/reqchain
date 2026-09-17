@@ -20,6 +20,18 @@ fn state_with(file: &str, text: &str) -> (tempfile::TempDir, AppState) {
     (dir, state)
 }
 
+fn state_with_secrets(entries: &[(&str, &str)]) -> (tempfile::TempDir, AppState) {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    let map: std::collections::BTreeMap<String, String> = entries
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    std::fs::write(paths.secrets_file(), serde_json::to_string(&map).unwrap()).unwrap();
+    let state = AppState::new(paths);
+    (dir, state)
+}
+
 #[tokio::test]
 async fn load_workspace_lists_apis_and_endpoints() {
     let (_d, state) = state_with("demo.json", GOOD);
@@ -178,6 +190,119 @@ async fn delete_api_rejects_a_path_traversal_id() {
         .unwrap_err();
     assert!(err.contains(".."), "unhelpful error: {err}");
     assert!(state.paths.apis_dir().join("demo.json").exists());
+}
+
+/// The whole point of `list_secrets` returning names: a screen that lists
+/// secrets must not ship their values to the webview to do it.
+#[tokio::test]
+async fn listing_secrets_never_returns_a_value() {
+    let (_d, state) = state_with_secrets(&[("GW_PASS", "hunter2")]);
+    let names = commands::list_secrets_inner(&state);
+    assert_eq!(names, vec!["GW_PASS".to_string()]);
+    let json = serde_json::to_string(&names).unwrap();
+    assert!(!json.contains("hunter2"));
+}
+
+#[tokio::test]
+async fn revealing_returns_exactly_one_value_and_only_by_name() {
+    let (_d, state) = state_with_secrets(&[("A", "one"), ("B", "two")]);
+    assert_eq!(commands::reveal_secret_inner(&state, "A").unwrap(), "one");
+    assert!(commands::reveal_secret_inner(&state, "nope").is_err());
+}
+
+/// A secret set through the UI must be usable by a run immediately — the
+/// executor holds its own `Secrets` snapshot, and the rotation fix in
+/// `AppState::reload` covers exactly this class of staleness. Setting one
+/// here goes through the same reload path, so a run against an endpoint that
+/// references it by name must succeed against a live mock server that only
+/// accepts the new value.
+#[tokio::test]
+async fn a_secret_set_through_the_command_is_visible_to_the_next_run() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/secure"))
+        .and(header("x-secret", "brand-new-value"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    std::fs::create_dir_all(paths.apis_dir()).unwrap();
+    let text = format!(
+        r#"{{"schemaVersion":1,"id":"demo","name":"Demo","baseUrl":"{}",
+        "endpoints":[
+          {{"id":"secure","name":"Secure","method":"GET","path":"/secure",
+            "headers":{{"X-Secret":"{{{{secret:PASS}}}}"}}}}]}}"#,
+        mock.uri()
+    );
+    std::fs::write(paths.apis_dir().join("demo.json"), text).unwrap();
+    let state = AppState::new(paths);
+
+    commands::set_secret_inner(&state, "PASS", "brand-new-value")
+        .await
+        .unwrap();
+
+    let run = commands::run_endpoint_inner(&state, "demo", "secure", None)
+        .await
+        .unwrap();
+    assert_eq!(run.status, 200);
+}
+
+#[tokio::test]
+async fn set_secret_rejects_an_empty_name() {
+    let (_d, state) = state_with_secrets(&[]);
+    let err = commands::set_secret_inner(&state, "", "v")
+        .await
+        .unwrap_err();
+    assert!(err.contains("empty"));
+}
+
+#[tokio::test]
+async fn delete_secret_reports_an_unknown_name_instead_of_succeeding_quietly() {
+    let (_d, state) = state_with_secrets(&[("A", "1")]);
+    let err = commands::delete_secret_inner(&state, "nope")
+        .await
+        .unwrap_err();
+    assert!(err.contains("nope"));
+    assert_eq!(commands::list_secrets_inner(&state), vec!["A".to_string()]);
+}
+
+#[tokio::test]
+async fn delete_secret_removes_it_and_persists() {
+    let (dir, state) = state_with_secrets(&[("A", "1"), ("B", "2")]);
+    commands::delete_secret_inner(&state, "A").await.unwrap();
+    assert_eq!(commands::list_secrets_inner(&state), vec!["B".to_string()]);
+
+    // Persisted to disk, not just the in-memory snapshot.
+    let paths = Paths::at(dir.path());
+    let reloaded = reqchain_core::secrets::Secrets::load(&paths);
+    assert_eq!(reloaded.names(), vec!["B".to_string()]);
+}
+
+#[tokio::test]
+async fn set_secret_persists_to_disk_with_0600_permissions() {
+    let (dir, state) = state_with_secrets(&[]);
+    commands::set_secret_inner(&state, "A", "value")
+        .await
+        .unwrap();
+
+    let paths = Paths::at(dir.path());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(paths.secrets_file())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let reloaded = reqchain_core::secrets::Secrets::load(&paths);
+    assert_eq!(reloaded.get("A"), Some("value"));
 }
 
 #[test]

@@ -279,6 +279,64 @@ pub fn history_inner(state: &AppState, api_id: &str, endpoint_id: &str) -> Vec<H
     history::load(&state.paths, api_id, endpoint_id)
 }
 
+/// Names only — this is the reason `list_secrets` returns `Vec<String>`
+/// rather than the `Secrets` map itself or any DTO wrapping it: there must be
+/// no code path in this function that can reach a value.
+pub fn list_secrets_inner(state: &AppState) -> Vec<String> {
+    state.secrets.lock().unwrap().names()
+}
+
+fn validate_secret_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("secret name must not be empty".to_string());
+    }
+    Ok(())
+}
+
+/// Sets (creates or replaces) a secret and reloads, so the `Executor`'s own
+/// `Secrets` snapshot (`AppState::reload`'s doc comment) picks it up
+/// immediately — a secret set through this command must be usable by the
+/// very next run, not just the next app restart.
+pub async fn set_secret_inner(state: &AppState, name: &str, value: &str) -> Result<(), String> {
+    validate_secret_name(name)?;
+    {
+        let mut secrets = state.secrets.lock().unwrap();
+        secrets.set(name, value.to_string());
+        secrets.save(&state.paths).map_err(|e| e.to_string())?;
+    }
+    state.reload().await;
+    Ok(())
+}
+
+/// Deletes a secret and reloads, for the same staleness reason as
+/// `set_secret_inner`.
+pub async fn delete_secret_inner(state: &AppState, name: &str) -> Result<(), String> {
+    validate_secret_name(name)?;
+    {
+        let mut secrets = state.secrets.lock().unwrap();
+        if !secrets.remove(name) {
+            return Err(format!("secret `{name}` not found"));
+        }
+        secrets.save(&state.paths).map_err(|e| e.to_string())?;
+    }
+    state.reload().await;
+    Ok(())
+}
+
+/// The ONLY function in the entire application that returns a stored
+/// credential to the webview. Returns exactly one value, by name. No other
+/// command may call this — see the security contract in the task-7 brief and
+/// spec §17.3.
+pub fn reveal_secret_inner(state: &AppState, name: &str) -> Result<String, String> {
+    state
+        .secrets
+        .lock()
+        .unwrap()
+        .get(name)
+        .map(str::to_string)
+        .ok_or_else(|| format!("secret `{name}` not found"))
+}
+
 #[tauri::command]
 pub async fn run_endpoint(
     state: tauri::State<'_, AppState>,
@@ -340,6 +398,30 @@ pub async fn save_api(
 #[tauri::command]
 pub async fn delete_api(state: tauri::State<'_, AppState>, api_id: String) -> Result<(), String> {
     delete_api_inner(&state, &api_id).await
+}
+
+#[tauri::command]
+pub fn list_secrets(state: tauri::State<AppState>) -> Vec<String> {
+    list_secrets_inner(&state)
+}
+
+#[tauri::command]
+pub async fn set_secret(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    value: String,
+) -> Result<(), String> {
+    set_secret_inner(&state, &name, &value).await
+}
+
+#[tauri::command]
+pub async fn delete_secret(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    delete_secret_inner(&state, &name).await
+}
+
+#[tauri::command]
+pub fn reveal_secret(state: tauri::State<AppState>, name: String) -> Result<String, String> {
+    reveal_secret_inner(&state, &name)
 }
 
 #[cfg(test)]

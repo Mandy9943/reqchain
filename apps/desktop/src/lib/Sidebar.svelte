@@ -4,6 +4,11 @@
   import { currentDoc, updateDoc } from "./doc.svelte";
   import { canWriteApiDoc, reload, select, ui } from "./state.svelte";
 
+  interface Props {
+    onOpenSecrets: () => void;
+  }
+  let { onOpenSecrets }: Props = $props();
+
   function matches(ep: EndpointDto, query: string): boolean {
     if (!query) return true;
     const q = query.toLowerCase();
@@ -609,6 +614,12 @@
       {/each}
     </div>
   {/if}
+
+  <div class="sidebar-footer">
+    <button type="button" class="secrets-button" onclick={onOpenSecrets}>
+      Secrets
+    </button>
+  </div>
 </aside>
 
 <style>
@@ -915,5 +926,26 @@
   .error-row {
     padding: 0.3rem 0.6rem;
     border-bottom: 1px solid var(--color-border);
+  }
+
+  .sidebar-footer {
+    flex-shrink: 0;
+    padding: 0.5rem 0.6rem;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .secrets-button {
+    width: 100%;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  .secrets-button:hover {
+    background: var(--color-hover);
   }
 </style>
