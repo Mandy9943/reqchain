@@ -10,6 +10,7 @@
     nextEnvSelection,
     validateEnvironmentName,
   } from "./environments";
+  import { setApiField } from "./fieldOrder";
 
   // `api` is the already-parsed document `RequestPanel` computed (its own
   // removed-tolerant `api`/`bufferText` fallbacks) — passed in rather than
@@ -56,14 +57,21 @@
   }
 
   function onVariablesChange(variables: Record<string, string>): void {
+    // `variables` has a serde default with no `skip_serializing_if`, so it
+    // is legally ABSENT from a hand-written or older file even though
+    // `emptyApi` always writes it — `setApiField` inserts it at its
+    // declared position (see fieldOrder.ts) instead of a plain `a.variables
+    // = ...`, which would append it after `endpoints` on such a file.
     mutateApi((a) => {
-      a.variables = variables;
+      setApiField(a, "variables", variables);
     });
   }
 
   function onAuthChange(auth: Auth): void {
+    // Same reasoning as `onVariablesChange` — `auth` has a serde default
+    // (`Auth::none`) with no `skip_serializing_if`.
     mutateApi((a) => {
-      a.auth = auth;
+      setApiField(a, "auth", auth);
     });
   }
 
@@ -78,25 +86,15 @@
       // `skip_serializing_if` other than "is None") and `storeBodies`
       // defaults to `true` — so the true/default case simply omits the
       // key, matching what `emptyApi` already does, rather than writing an
-      // explicit value that merely equals the default.
-      //
-      // Field order matters (model.ts's top-of-file note): `history` sits
-      // BETWEEN `auth` and `endpoints` in `Api` (model.rs). A plain
-      // `a.history = ...` on an object that doesn't already have that key
-      // would insert it at the END of the object's own key order (after
-      // `endpoints`) instead — JS object key order is insertion order, and
-      // this key was never inserted before. `endpoints` is the last field,
-      // so temporarily removing and re-adding it brackets the `history`
-      // write in the right place regardless of whether `history` already
-      // existed.
-      const endpoints = a.endpoints;
-      delete (a as Partial<Api>).endpoints;
+      // explicit value that merely equals the default. Deleting an
+      // already-present key never moves any other key's position, so no
+      // helper is needed for that half; `setApiField` handles the
+      // insertion half (see fieldOrder.ts).
       if (checked) {
         delete a.history;
       } else {
-        a.history = { storeBodies: false };
+        setApiField(a, "history", { storeBodies: false });
       }
-      a.endpoints = endpoints;
     });
   }
 
@@ -108,26 +106,18 @@
    * array reference already on the document whenever one is already there
    * (so mutating it in place, e.g. via `.splice`, or mutating one of its
    * entries directly, e.g. `env.name = ...`, keeps every OTHER field's
-   * position untouched), falling back to a freshly-assigned empty array
+   * position untouched), falling back to a freshly-inserted empty array
    * only when `environments` is genuinely absent or not an array at all —
    * legal per model.rs's `#[serde(default)]` (an older/hand-written file
    * may omit it, or a JSON-tab edit may have corrupted it), just never
-   * produced by this app itself (`emptyApi` always writes `[]`).
-   *
-   * That fallback assignment is the one case here that can NOT preserve
-   * `environments`'s field position (between `variables` and `auth`) the
-   * way `onStoreBodiesChange`'s `history` fix does — inserting a
-   * genuinely-new key at an exact prior position while also removing and
-   * restoring every trailing field is disproportionate for a case this
-   * document format's own two other consumers (`EndpointForm`'s
-   * `headers`/`query`/`variables`) don't defend against either, since a
-   * file this app itself ever wrote always already has the key. Accepted
-   * as a known, narrow, cosmetic-only limitation (a one-time field-order
-   * diff on first edit of such a file), not a crash or data loss.
+   * produced by this app itself (`emptyApi` always writes `[]`). Routes
+   * that fallback through `setApiField` so it lands at `environments`'s
+   * declared position (between `variables` and `auth`), not appended after
+   * `endpoints`.
    */
   function liveEnvironments(a: Api): Environment[] {
     if (Array.isArray(a.environments)) return a.environments;
-    a.environments = [];
+    setApiField(a, "environments", []);
     return a.environments;
   }
 

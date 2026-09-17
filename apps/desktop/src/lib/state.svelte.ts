@@ -1,6 +1,7 @@
 // Shared UI state (Svelte 5 runes). This is the contract tasks 8-10 build
 // against — keep the exported names stable.
 import { listen } from "@tauri-apps/api/event";
+import { nextEnvSelection } from "./envSelection";
 import {
   loadWorkspace,
   runEndpoint,
@@ -169,16 +170,13 @@ export async function reload(): Promise<void> {
     // without clobbering a choice the user already made — unless that
     // choice no longer names a real environment (e.g. it was removed from
     // the file), in which case it would otherwise linger as a value with no
-    // matching <option>.
+    // matching <option>. `nextEnvSelection` is the ONE place this rule
+    // lives — `ApiForm.svelte`'s environment add/rename/remove (see
+    // `envSelection.ts`'s doc comment) applies the identical rule to the
+    // buffer immediately after an edit, before any save; both call this
+    // same function so the two can't drift apart.
     for (const api of workspace.apis) {
-      const current = ui.env[api.id];
-      const stale =
-        current !== undefined &&
-        current !== null &&
-        !api.environments.includes(current);
-      if (current === undefined || stale) {
-        ui.env[api.id] = api.environments[0] ?? null;
-      }
+      ui.env[api.id] = nextEnvSelection(api.environments, ui.env[api.id]);
     }
 
     // Selected endpoint (or, for an API-only selection, the API itself)

@@ -11,6 +11,7 @@
 // coerce" rule tasks 3-5 were each bitten by skipping once already.
 
 import type { Environment } from "../model";
+import { nextEnvSelection as nextEnvSelectionByName } from "../envSelection";
 import { asRecord } from "./keyValueRows";
 
 /** Runtime-safe coercion of one `environments` entry. Anything that isn't a
@@ -72,20 +73,24 @@ export function validateEnvironmentName(
 /**
  * Keeps a UI environment-selection value (`ui.env[apiId]`) sane after an
  * environment list changes (add/rename/remove) — mirrors exactly the
- * "stale value" check `reload()` already applies in state.svelte.ts after
- * a fresh workspace load (`current !== null && !api.environments.includes
- * (current)` -> fall back to the first environment, or `null` if there is
- * none). Applying the same rule immediately after an edit (rather than
- * only once `reload()` next runs, which for an unsaved buffer edit could
- * be arbitrarily far in the future) means a removed or renamed-away
- * selection is never left dangling in the interim.
+ * "stale value" check `reload()` (state.svelte.ts) already applies after a
+ * fresh workspace load. Applying the same rule immediately after an edit
+ * (rather than only once `reload()` next runs, which for an unsaved buffer
+ * edit could be arbitrarily far in the future) means a removed or
+ * renamed-away selection is never left dangling in the interim.
+ *
+ * A thin adapter over `../envSelection`'s `nextEnvSelection` — the actual
+ * rule lives there ONCE, shared with `reload()`'s own call to it, so the
+ * two can never quietly drift apart. This wrapper exists only because this
+ * module's callers have `Environment[]` (the buffer's shape) on hand,
+ * while `reload()` has `string[]` (`ApiDto.environments`) on hand.
  */
 export function nextEnvSelection(
   environments: Environment[],
   current: string | null,
 ): string | null {
-  if (current !== null && environments.some((e) => e.name === current)) {
-    return current;
-  }
-  return environments[0]?.name ?? null;
+  return nextEnvSelectionByName(
+    environments.map((e) => e.name),
+    current,
+  );
 }
