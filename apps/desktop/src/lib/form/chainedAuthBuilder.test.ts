@@ -6,18 +6,42 @@ import {
   buildInject,
   buildTtl,
   chainWalk,
+  currentSourceProblem,
   DEFAULT_RETRY_ON,
+  excludedSourceCandidates,
+  extraRetryStatuses,
   extractChoiceOf,
   injectChoiceOf,
+  MAX_DEPTH,
   reachesInheritedEndpoint,
+  sourceExclusionReason,
+  sourceProblemLabel,
   toggleRetryStatus,
   ttlChoiceOf,
   validSourceEndpoints,
+  wouldExceedDepth,
+  XPATH_UNSUPPORTED_MESSAGE,
 } from "./chainedAuthBuilder";
 import { emptyApi, emptyEndpoint, type Api, type Auth, type Endpoint } from "../model";
 
 function ep(id: string, auth: Auth): Endpoint {
   return { ...emptyEndpoint(id, id), auth };
+}
+
+/** An endpoint whose `auth` key is genuinely ABSENT — not `undefined` typed
+ * away, but literally missing, the way a hand-written or agent-written file
+ * that never mentions `auth` at all parses (per `SPEC.md`, `model.rs`'s
+ * `#[serde(default = "Auth::inherit")]`, and `parseApi`'s own test coverage
+ * for exactly this). `model.ts`'s `Endpoint.auth: Auth` type claims this
+ * can't happen; the cast below is the same "the compile-time type lies
+ * about what `dto_for_api` can genuinely hand this module" gap `authEditor
+ * .ts`'s `resolveAuth` and this module's `reachesInheritedEndpoint` guard
+ * against. */
+function epNoAuth(id: string): Endpoint {
+  const withAuth = ep(id, { type: "inherit" });
+  const raw = withAuth as unknown as Record<string, unknown>;
+  delete raw.auth;
+  return raw as unknown as Endpoint;
 }
 
 function apiWith(endpoints: Endpoint[], apiAuth: Auth = { type: "none" }): Api {
@@ -77,6 +101,12 @@ describe("chainWalk", () => {
     const api = apiWith([]);
     expect(chainWalk(api, "ghost")).toEqual(["ghost"]);
   });
+
+  it("does not throw and treats a genuinely absent auth key as inherit — CRITICAL: an agent-written file omitting `auth` is valid (SPEC.md, model.rs's serde default), and dto_for_api hands parseApi the raw on-disk text unnormalized", () => {
+    const api = apiWith([epNoAuth("a"), ep("b", { type: "none" })], chainedTo("b"));
+    expect(() => chainWalk(api, "a")).not.toThrow();
+    expect(chainWalk(api, "a")).toEqual(["a", "b"]);
+  });
 });
 
 describe("reachesInheritedEndpoint", () => {
@@ -99,6 +129,12 @@ describe("reachesInheritedEndpoint", () => {
   it("is false for a dangling source", () => {
     const api = apiWith([ep("a", chainedTo("ghost"))]);
     expect(reachesInheritedEndpoint(api, "a")).toBe(false);
+  });
+
+  it("does not throw and treats a genuinely absent auth key as inherit", () => {
+    const api = apiWith([ep("a", chainedTo("b")), epNoAuth("b")]);
+    expect(() => reachesInheritedEndpoint(api, "a")).not.toThrow();
+    expect(reachesInheritedEndpoint(api, "a")).toBe(true);
   });
 });
 
@@ -162,7 +198,7 @@ describe("validSourceEndpoints — the core cycle-prevention logic", () => {
     );
   });
 
-  it("excludes a candidate reachable only through an inherited endpoint-level auth", () => {
+  it("does NOT exclude a candidate whose own auth is inherit but whose resolved chain never cycles back", () => {
     const api = apiWith(
       [
         ep("token", { type: "none" }),
@@ -204,6 +240,130 @@ describe("validSourceEndpoints — the core cycle-prevention logic", () => {
   it("offers nothing when the API has only the endpoint being edited", () => {
     const api = apiWith([ep("solo", { type: "inherit" })]);
     expect(validSourceEndpoints(api, "solo")).toEqual([]);
+  });
+});
+
+// HIGH review finding: depth was not modelled at all — a candidate whose
+// chain is already at the engine's MAX_DEPTH limit was offered anyway,
+// letting the builder construct exactly the configuration
+// `reqchain validate` rejects as an error and `save_api` refuses to write.
+// Topology below matches the SHIPPED fixture `tests/fixtures/chain-too-
+// deep.json` exactly (a -> b -> c -> d -> e -> f, f terminal).
+describe("depth — mirrors crates/core/src/chain.rs::MAX_DEPTH and validate.rs::check_cycles", () => {
+  function deepChainApi(length: number): Api {
+    const ids = Array.from({ length }, (_, i) => String.fromCharCode(97 + i)); // a, b, c, ...
+    const endpoints = ids.map((id, i) =>
+      i === ids.length - 1
+        ? ep(id, { type: "none" })
+        : ep(id, chainedTo(ids[i + 1])),
+    );
+    return apiWith(endpoints);
+  }
+
+  it("wouldExceedDepth is false when the resulting total is exactly MAX_DEPTH", () => {
+    // a -> b -> c -> d -> e (5 endpoints, e terminal). `wouldExceedDepth`
+    // measures "1 (the endpoint that would point at this candidate) +
+    // candidate's own walk" — so the candidate whose own walk is exactly
+    // 4 long (b -> c -> d -> e) makes a total of 5, still within
+    // MAX_DEPTH, not one past it.
+    const api = deepChainApi(5);
+    expect(chainWalk(api, "b")).toHaveLength(4);
+    expect(wouldExceedDepth(api, "b")).toBe(false);
+  });
+
+  it("wouldExceedDepth is true the instant a chain exceeds MAX_DEPTH", () => {
+    // a -> b -> c -> d -> e -> f (6 endpoints) — one past the limit, exactly
+    // tests/fixtures/chain-too-deep.json's topology.
+    const api = deepChainApi(6);
+    expect(wouldExceedDepth(api, "a")).toBe(true);
+  });
+
+  it("excludes a source that would recreate chain-too-deep.json's exact rejected configuration", () => {
+    const api = deepChainApi(6); // a -> b -> c -> d -> e -> f
+    // Editing `a`'s own auth (it already points at `b`): offering `b` again
+    // would just be today's file, which the engine ALREADY rejects with
+    // "auth chain deeper than 5 levels: a -> b -> c -> d -> e -> f".
+    const sources = validSourceEndpoints(api, "a").map((e) => e.id);
+    expect(sources).not.toContain("b");
+  });
+
+  it("wouldExceedDepth counts a dangling source, matching validate.rs's check_cycles (which pushes before checking existence)", () => {
+    const api = apiWith([
+      ep("a", chainedTo("b")),
+      ep("b", chainedTo("c")),
+      ep("c", chainedTo("d")),
+      ep("d", chainedTo("e")),
+      ep("e", chainedTo("does-not-exist")),
+    ]);
+    // chainWalk(api, "a") = [a, b, c, d, e, does-not-exist] — 6 entries.
+    expect(wouldExceedDepth(api, "a")).toBe(true);
+  });
+
+  it("MAX_DEPTH is exactly 5, matching crates/core/src/chain.rs", () => {
+    expect(MAX_DEPTH).toBe(5);
+  });
+});
+
+// MEDIUM review finding: the dropdown silently rendered "Select an
+// endpoint…" for a document whose CURRENT source already forms a cycle or
+// dangles — telling the user there is no source when the file says
+// otherwise. `currentSourceProblem`/`excludedSourceCandidates` are what let
+// the component show the real, named problem instead of hiding it.
+describe("currentSourceProblem / excludedSourceCandidates / sourceProblemLabel", () => {
+  it("is null for an empty (unset) source", () => {
+    const api = apiWith([ep("a", { type: "none" })]);
+    expect(currentSourceProblem(api, "a", "")).toBeNull();
+  });
+
+  it("is null for a source that is already valid", () => {
+    const api = apiWith([ep("a", { type: "none" }), ep("b", { type: "none" })]);
+    expect(currentSourceProblem(api, "b", "a")).toBeNull();
+  });
+
+  it("reports \"missing\" for a dangling source — tests/fixtures/chain-missing.json's exact shape", () => {
+    const api = apiWith([ep("business", chainedTo("nonexistent"))]);
+    expect(currentSourceProblem(api, "business", "nonexistent")).toBe("missing");
+    expect(sourceProblemLabel("nonexistent", "missing")).toBe(
+      "nonexistent — no such endpoint",
+    );
+  });
+
+  it("reports \"cycle\" for a source that already cycles — tests/fixtures/chain-cycle.json's exact shape (a <-> b)", () => {
+    const api = apiWith([ep("a", chainedTo("b")), ep("b", chainedTo("a"))]);
+    // Opening `a`'s own auth: its current source is `b`, and `b` already
+    // points back at `a` — a real, already-on-file cycle.
+    expect(currentSourceProblem(api, "a", "b")).toBe("cycle");
+    expect(sourceProblemLabel("b", "cycle")).toBe("b — forms a cycle");
+  });
+
+  it("reports \"too-deep\" for a source already past MAX_DEPTH", () => {
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    const endpoints = ids.map((id, i) =>
+      i === ids.length - 1 ? ep(id, { type: "none" }) : ep(id, chainedTo(ids[i + 1])),
+    );
+    const api = apiWith(endpoints);
+    expect(currentSourceProblem(api, "a", "b")).toBe("too-deep");
+    expect(sourceProblemLabel("b", "too-deep")).toBe(
+      "b — chain too deep (max 5 endpoints)",
+    );
+  });
+
+  it("sourceExclusionReason distinguishes self from cycle, but sourceProblemLabel describes both as a cycle", () => {
+    const api = apiWith([ep("a", { type: "inherit" })]);
+    expect(sourceExclusionReason(api, "a", "a")).toBe("self");
+    expect(sourceProblemLabel("a", "self")).toBe("a — forms a cycle");
+  });
+
+  it("excludedSourceCandidates names every excluded endpoint and reason, omitting the endpoint being edited itself", () => {
+    const api = apiWith([
+      ep("a", chainedTo("b")),
+      ep("b", chainedTo("a")),
+      ep("c", { type: "none" }),
+    ]);
+    // Editing `a`: `b` cycles back to `a`; `c` is fine (not excluded, so not
+    // listed); `a` itself is never listed even though it "excludes" itself.
+    const excluded = excludedSourceCandidates(api, "a");
+    expect(excluded).toEqual([{ id: "b", name: "b", reason: "cycle" }]);
   });
 });
 
@@ -251,6 +411,42 @@ describe("extract choices", () => {
         typeof extractChoiceOf
       >[0]),
     ).toBe("default");
+  });
+
+  // MEDIUM review finding: an xpath extract was silently shown as
+  // "Body — JSONPath" with an empty field, misrepresenting
+  // tests/fixtures/chain.json's `xpath-business` endpoint entirely, and
+  // xpath was checked AFTER regex where `chain.rs`'s `extract_value` checks
+  // it FIRST (xpath wins even when a regex is also present).
+  describe("xpath — matches crates/core/src/chain.rs's extract_value precedence", () => {
+    it("recognizes an xpath extract explicitly, not as JSONPath", () => {
+      expect(extractChoiceOf({ from: "body", xpath: "//token" })).toBe(
+        "body-xpath",
+      );
+    });
+
+    it("xpath takes precedence over a simultaneously-present regex — matches the engine checking xpath first", () => {
+      expect(
+        extractChoiceOf({ from: "body", xpath: "//token", regex: "(.+)" }),
+      ).toBe("body-xpath");
+    });
+
+    it("xpath takes precedence over a simultaneously-present jsonPath", () => {
+      expect(
+        extractChoiceOf({ from: "body", xpath: "//token", jsonPath: "$.x" }),
+      ).toBe("body-xpath");
+    });
+
+    it("buildExtract never manufactures an xpath extract on its own (not a normal, selectable choice)", () => {
+      const built = buildExtract("body-xpath");
+      expect(built).not.toHaveProperty("xpath");
+    });
+
+    it("XPATH_UNSUPPORTED_MESSAGE matches the engine's exact wording", () => {
+      expect(XPATH_UNSUPPORTED_MESSAGE).toBe(
+        "xpath extraction is not implemented yet — use jsonPath or regex",
+      );
+    });
   });
 });
 
@@ -318,5 +514,23 @@ describe("retryOn", () => {
 
   it("toggleRetryStatus is defensive against a corrupted current value", () => {
     expect(toggleRetryStatus(undefined, 500)).toEqual([401, 403, 500]);
+  });
+
+  // LOW review finding: a retryOn value outside the eight curated chips
+  // (e.g. a JSON-tab edit adding 504) was preserved by every function here
+  // but had no chip to render it — invisible in the UI while still real in
+  // the file.
+  describe("extraRetryStatuses", () => {
+    it("is empty when every status has a chip", () => {
+      expect(extraRetryStatuses([401, 403])).toEqual([]);
+    });
+
+    it("surfaces a status with no chip", () => {
+      expect(extraRetryStatuses([401, 504])).toEqual([504]);
+    });
+
+    it("defaults an absent value the same way asRetryOn does (no extras)", () => {
+      expect(extraRetryStatuses(undefined)).toEqual([]);
+    });
   });
 });

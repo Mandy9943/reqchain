@@ -31,23 +31,50 @@ const AUTH_TYPES: readonly AuthType[] = [
   "chained",
 ];
 
-/** The type driving the selector. Falls back to `"none"` for a runtime
- * `auth.type` that isn't one of the seven known tags (defensive; `parseApi`'s
- * own shape check should make this unreachable in practice). */
-export function authTypeOf(auth: Auth | undefined): AuthType {
+/**
+ * The type driving the selector. Falls back to `fallback` for a runtime
+ * `auth` that is `undefined` or whose `type` isn't one of the seven known
+ * tags.
+ *
+ * `fallback` is REQUIRED, not defaulted, because "absent" means different
+ * things at the two levels `model.rs` allows `auth` to be missing from: an
+ * `Endpoint` with no `auth` key defaults to `Auth::inherit()`, while an
+ * `Api` with no `auth` key defaults to `Auth::none()` (both `#[serde(default
+ * = ...)]`, both real, agent-writable files per `SPEC.md`). One
+ * level-agnostic default would be right for one level and wrong for the
+ * other — this bit us once already (an endpoint with no `auth` key showed
+ * "None" while the engine actually applied the API-level auth): pass the
+ * caller's own level-appropriate fallback instead of guessing here.
+ */
+export function authTypeOf(auth: Auth | undefined, fallback: AuthType): AuthType {
   const t = (auth as { type?: unknown } | undefined)?.type;
   return (AUTH_TYPES as readonly string[]).includes(t as string)
     ? (t as AuthType)
-    : "none";
+    : fallback;
 }
 
 /** Resolves `inherit` exactly like `auth::resolve` in
  * `crates/core/src/auth.rs`: an endpoint's `inherit` auth resolves to the
  * API's own auth; an API whose OWN auth is `inherit` resolves to `none` —
- * there is nothing above it to inherit from. */
-export function resolveAuth(api: Api, auth: Auth): Auth {
-  if (auth.type !== "inherit") return auth;
-  return api.auth.type === "inherit" ? { type: "none" } : api.auth;
+ * there is nothing above it to inherit from.
+ *
+ * Defensive against both of `auth::resolve`'s inputs being genuinely absent
+ * at runtime, not just malformed: `model.rs` gives both `Endpoint.auth` and
+ * `Api.auth` a `#[serde(default...)]` with no `skip_serializing_if`, so a
+ * hand-written or agent-written file omitting either key is VALID per
+ * `SPEC.md` and accepted by `parseApi` — but `model.ts`'s `Api`/`Endpoint`
+ * types mark both fields non-optional (per task 1's rule: they're always
+ * WRITTEN by Rust, so the TS type says "always there"), which means the
+ * compile-time type lies about a value `dto_for_api` can genuinely hand
+ * this module: the raw on-disk text, unnormalized. `auth` defaults to
+ * `Auth::inherit()` (endpoint level's serde default); `api.auth` defaults
+ * to `Auth::none()` (API level's serde default) — exactly `model.rs`'s own
+ * fallbacks, not a third guess. */
+export function resolveAuth(api: Api, auth: Auth | undefined): Auth {
+  const a: Auth = auth ?? { type: "inherit" };
+  if (a.type !== "inherit") return a;
+  const apiAuth: Auth = api.auth ?? { type: "none" };
+  return apiAuth.type === "inherit" ? { type: "none" } : apiAuth;
 }
 
 /** The label for the `inherit` option at endpoint level, e.g.

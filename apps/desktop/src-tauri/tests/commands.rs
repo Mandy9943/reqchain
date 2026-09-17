@@ -4,6 +4,13 @@ use reqchain_desktop::state::AppState;
 
 const GOOD: &str = r#"{"schemaVersion":1,"id":"demo","name":"Demo","baseUrl":"https://api.example.com","endpoints":[{"id":"ping","name":"Ping","method":"GET","path":"/ping"}]}"#;
 
+/// A chained auth that OMITS `extract`, `ttl` AND `retryOn` entirely —
+/// exactly the shape `reqchain-visual-editing` task 5's report initially
+/// (and wrongly) implied the frontend's byte-for-byte fixture match
+/// generalized to. It does not: this is `tests/fixtures/chain.json`'s own
+/// shape (minus `extract`/`ttl`, to isolate `retryOn` specifically).
+const CHAINED_NO_RETRY: &str = r#"{"schemaVersion":1,"id":"demo","name":"Demo","baseUrl":"https://api.example.com","endpoints":[{"id":"token","name":"Token","method":"POST","path":"/token","auth":{"type":"none"}},{"id":"biz","name":"Biz","method":"GET","path":"/biz","auth":{"type":"chained","source":{"endpoint":"token"},"inject":{"into":"header","name":"Authorization","template":"Bearer {{value}}"}}}]}"#;
+
 fn state_with(file: &str, text: &str) -> (tempfile::TempDir, AppState) {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::at(dir.path());
@@ -212,4 +219,43 @@ async fn an_endpoint_inheriting_a_chained_api_auth_reports_chained() {
     assert_eq!(kind("inherits"), "chained", "the marker must be shown");
     assert_eq!(kind("token"), "none");
     assert_eq!(kind("explicit"), "none", "an explicit override still wins");
+}
+
+/// Task 5's report claimed the chained-auth builder's output matches the
+/// shipped `example-gateway-test.json` fixture byte-for-byte — true, but
+/// that fixture happens to write `extract`/`ttl`/`retryOn` explicitly. This
+/// pins the DIFFERENT, general fact the report's wording glossed over:
+/// `retry_on` has `#[serde(default = "default_retry_on")]` with NO
+/// `skip_serializing_if`, so `Api::to_json_string` ALWAYS writes it — a
+/// document that omits `retryOn` gains it on its very first save. `extract`
+/// and `ttl` (both `#[serde(default, skip_serializing_if =
+/// "Option::is_none")]`) behave oppositely and stay omitted if omitted,
+/// pinned here too so the asymmetry is explicit rather than assumed.
+#[tokio::test]
+async fn save_api_adds_the_default_retry_on_but_leaves_omitted_extract_ttl_omitted() {
+    let (_d, state) = state_with("demo.json", CHAINED_NO_RETRY);
+    let diags = commands::save_api_inner(&state, "demo", CHAINED_NO_RETRY)
+        .await
+        .unwrap();
+    assert!(
+        diags.iter().all(|d| d.severity != "error"),
+        "unexpected errors: {diags:?}"
+    );
+    let written = std::fs::read_to_string(state.paths.apis_dir().join("demo.json")).unwrap();
+    assert!(
+        written.contains(r#""retryOn": ["#),
+        "retryOn must be ADDED on save even though the input omitted it — got:\n{written}"
+    );
+    assert!(
+        written.contains("401") && written.contains("403"),
+        "the added retryOn must be the documented default [401, 403] — got:\n{written}"
+    );
+    assert!(
+        !written.contains("\"extract\""),
+        "extract has skip_serializing_if and must stay omitted when the input omitted it — got:\n{written}"
+    );
+    assert!(
+        !written.contains("\"ttl\""),
+        "ttl has skip_serializing_if and must stay omitted when the input omitted it — got:\n{written}"
+    );
 }

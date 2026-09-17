@@ -352,6 +352,19 @@ describe("parseApi", () => {
       ).toBe(true);
     });
 
+    // MEDIUM review finding: header VALUES weren't checked to be strings —
+    // `model.rs`'s `Header { headers: BTreeMap<String, String> }` requires
+    // it, and a non-string value would render fine in this form (JS
+    // coerces it) but fail at Save with a raw serde type error.
+    it("rejects header auth whose headers has a non-string value", () => {
+      const parsed = parseApi(
+        apiWithAuth('{ "type": "header", "headers": { "X-Api-Key": 1 } }'),
+      );
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain("X-Api-Key");
+    });
+
     it.each(["name", "expression"])("rejects computed missing %s", (missing) => {
       const fields = { name: '"h"', expression: '"1"' };
       delete (fields as Record<string, string>)[missing];
@@ -483,6 +496,21 @@ describe("parseApi", () => {
         ).toBe(false);
       });
 
+      // MEDIUM review finding: `ttl.fixed.seconds` is `u64` in `model.rs`
+      // (a non-negative integer) but was only checked as `typeof ===
+      // "number"`, so a negative or fractional value passed here and would
+      // have failed only at Save time.
+      it.each(['{ "from": "fixed", "seconds": -1 }', '{ "from": "fixed", "seconds": 3.5 }'])(
+        "rejects a fixed ttl with a non-u64 seconds value: %s",
+        (badTtl) => {
+          expect(
+            parseApi(
+              apiWithAuth(`{ "type": "chained", ${source}, "ttl": ${badTtl}, ${inject} }`),
+            ).ok,
+          ).toBe(false);
+        },
+      );
+
       it("rejects retryOn that is not an array of numbers", () => {
         expect(
           parseApi(
@@ -498,6 +526,32 @@ describe("parseApi", () => {
             ),
           ).ok,
         ).toBe(false);
+      });
+
+      // MEDIUM review finding: `retryOn` is `Vec<u16>` in `model.rs`, but
+      // any number passed the old check — `-1`, `99999` and `401.5` all
+      // would have rendered fine here and failed only at Save time.
+      it.each(["[-1]", "[99999]", "[401.5]"])(
+        "rejects retryOn with a value outside u16's range/integer-ness: %s",
+        (badRetryOn) => {
+          expect(
+            parseApi(
+              apiWithAuth(
+                `{ "type": "chained", ${source}, ${inject}, "retryOn": ${badRetryOn} }`,
+              ),
+            ).ok,
+          ).toBe(false);
+        },
+      );
+
+      it("accepts retryOn at u16's exact boundaries (0 and 65535)", () => {
+        expect(
+          parseApi(
+            apiWithAuth(
+              `{ "type": "chained", ${source}, ${inject}, "retryOn": [0, 65535] }`,
+            ),
+          ).ok,
+        ).toBe(true);
       });
 
       it("accepts retryOn simply absent (retry_on HAS a serde default)", () => {

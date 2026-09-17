@@ -49,7 +49,18 @@
     ),
   );
 
-  const currentType = $derived(authTypeOf(auth));
+  // `model.rs`'s own serde defaults, per level — see `authTypeOf`'s doc
+  // comment. An endpoint with no `auth` key is `inherit`; an API with no
+  // `auth` key is `none`. `endpointId === null` is exactly how this
+  // component already distinguishes "editing the API's own auth" (task 6's
+  // `ApiForm`) from "editing one endpoint's auth".
+  const levelFallback = $derived<AuthType>(endpointId === null ? "none" : "inherit");
+  const currentType = $derived(authTypeOf(auth, levelFallback));
+
+  // Unique per component instance, so two `AuthEditor`s mounted at once
+  // (task 6's `ApiForm` alongside `EndpointForm`) never collide on a
+  // hardcoded DOM id/`for` pair.
+  const uid = $props.id();
 
   function onTypeChange(e: Event): void {
     const value = (e.currentTarget as HTMLSelectElement).value as AuthType;
@@ -93,8 +104,8 @@
 
 <div class="auth-editor">
   <div class="field-row">
-    <label for="auth-type">Auth</label>
-    <select id="auth-type" value={currentType} onchange={onTypeChange}>
+    <label for="{uid}-auth-type">Auth</label>
+    <select id="{uid}-auth-type" value={currentType} onchange={onTypeChange}>
       {#each types as t (t.value)}
         <option value={t.value}>{t.label}</option>
       {/each}
@@ -103,18 +114,18 @@
 
   {#if currentType === "basic"}
     <div class="field-row">
-      <label for="auth-basic-username">Username</label>
+      <label for="{uid}-auth-basic-username">Username</label>
       <input
-        id="auth-basic-username"
+        id="{uid}-auth-basic-username"
         type="text"
         value={auth.type === "basic" ? auth.username : ""}
         oninput={onBasicUsernameChange}
       />
     </div>
     <div class="field-row">
-      <label for="auth-basic-password">Password</label>
+      <label for="{uid}-auth-basic-password">Password</label>
       <input
-        id="auth-basic-password"
+        id="{uid}-auth-basic-password"
         type="text"
         placeholder={"{{secret:NAME}}"}
         value={auth.type === "basic" ? auth.password : ""}
@@ -123,9 +134,9 @@
     </div>
   {:else if currentType === "bearer"}
     <div class="field-row">
-      <label for="auth-bearer-token">Token</label>
+      <label for="{uid}-auth-bearer-token">Token</label>
       <input
-        id="auth-bearer-token"
+        id="{uid}-auth-bearer-token"
         type="text"
         placeholder={"{{secret:NAME}}"}
         value={auth.type === "bearer" ? auth.token : ""}
@@ -143,18 +154,18 @@
     </section>
   {:else if currentType === "computed"}
     <div class="field-row">
-      <label for="auth-computed-name">Header name</label>
+      <label for="{uid}-auth-computed-name">Header name</label>
       <input
-        id="auth-computed-name"
+        id="{uid}-auth-computed-name"
         type="text"
         value={auth.type === "computed" ? auth.name : ""}
         oninput={onComputedNameChange}
       />
     </div>
     <div class="field-row">
-      <label for="auth-computed-expr">Expression</label>
+      <label for="{uid}-auth-computed-expr">Expression</label>
       <input
-        id="auth-computed-expr"
+        id="{uid}-auth-computed-expr"
         type="text"
         class="mono"
         value={auth.type === "computed" ? auth.expression : ""}

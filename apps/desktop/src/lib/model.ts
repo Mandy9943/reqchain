@@ -283,8 +283,15 @@ function validateTtlShape(value: unknown, path: string): string | null {
       return null;
     }
     case "fixed":
-      if (typeof value.seconds !== "number") {
-        return `${path}.seconds must be a number`;
+      // `model.rs`'s `Fixed { seconds: u64 }` — a non-negative integer.
+      // `typeof === "number"` alone would accept `-1` or `3.5`, both of
+      // which Rust's own `u64` deserializer rejects outright at Save time.
+      if (
+        typeof value.seconds !== "number" ||
+        !Number.isInteger(value.seconds) ||
+        value.seconds < 0
+      ) {
+        return `${path}.seconds must be a non-negative integer`;
       }
       return null;
     case "absolute":
@@ -344,6 +351,26 @@ function validateInjectShape(value: unknown, path: string): string | null {
  * Not a full re-validation of every variant's semantics (an invalid
  * `jsonPath`, an unknown `computed` function, a dangling chained
  * `source.endpoint`, a cycle) — that stays `lint`'s job.
+ *
+ * Deliberately does NOT mirror `#[serde(deny_unknown_fields)]`: an extra,
+ * unrecognized key on an otherwise well-shaped auth object is left alone
+ * here. That is a considered choice, not an oversight — the two kinds of
+ * defect this function exists to catch are not symmetric:
+ *  - a MISSING required field crashes a JS code path in this file (or a
+ *    sibling `AuthEditor`/`ChainedAuthBuilder` render) with an
+ *    `undefined`-is-not-an-object exception, which is what every check
+ *    above prevents;
+ *  - an EXTRA field crashes nothing here — every field access in this
+ *    codebase reads specific named properties, never enumerates "all of
+ *    them" — and is caught safely at Save time by `Api::from_json`'s own
+ *    `deny_unknown_fields`, which rejects it with a comprehensible `unknown
+ *    field ...` error and leaves the on-disk file untouched
+ *    (`save_api_rejects_an_invalid_document_and_leaves_the_file_untouched`).
+ * Mirroring `deny_unknown_fields` here would mean hand-maintaining a second
+ * exhaustive allow-list of every field name per variant, purely to convert
+ * an already-safe Save-time rejection into an earlier one — a real cost
+ * (one more thing to keep in sync with `model.rs`) for no crash this
+ * function doesn't already prevent some other way.
  */
 function validateAuthShape(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
@@ -358,11 +385,23 @@ function validateAuthShape(value: unknown, path: string): string | null {
       );
     case "bearer":
       return requireStringField(value, "token", path);
-    case "header":
+    case "header": {
+      // `model.rs`'s `Header { headers: BTreeMap<String, String> }` — every
+      // VALUE must be a string too, not just the object shape itself.
+      // Without this, `{"headers": {"X-Api-Key": 1}}` would pass here,
+      // render fine (JS coerces a number into a string in the input's
+      // `value` binding), and then fail at Save with a raw serde "invalid
+      // type: integer, expected a string" error.
       if (!("headers" in value) || !isPlainObject(value.headers)) {
         return `${path}.headers must be an object`;
       }
+      for (const [k, v] of Object.entries(value.headers)) {
+        if (typeof v !== "string") {
+          return `${path}.headers.${k} must be a string`;
+        }
+      }
       return null;
+    }
     case "computed":
       return (
         requireStringField(value, "name", path) ??
@@ -384,11 +423,21 @@ function validateAuthShape(value: unknown, path: string): string | null {
       const injectError = validateInjectShape(value.inject, `${path}.inject`);
       if (injectError) return injectError;
       if ("retryOn" in value && value.retryOn !== undefined) {
+        // `model.rs`'s `retry_on: Vec<u16>` — every element must be an
+        // integer in u16's range (0-65535). Checking only `typeof ===
+        // "number"` would accept `-1`, `99999` or `401.5`, all of which
+        // Rust's own `u16` deserializer rejects at Save time (SPEC.md's
+        // 100-599 HTTP-status restriction is a separate, semantic `lint`
+        // check, not part of the type itself, and stays out of scope here
+        // — same "shape, not semantics" boundary `validateBodyShape`
+        // already draws).
         if (
           !Array.isArray(value.retryOn) ||
-          !value.retryOn.every((n) => typeof n === "number")
+          !value.retryOn.every(
+            (n) => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 65535,
+          )
         ) {
-          return `${path}.retryOn must be an array of numbers`;
+          return `${path}.retryOn must be an array of integers in 0-65535`;
         }
       }
       return null;
