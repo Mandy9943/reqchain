@@ -22,7 +22,7 @@
 // only does anything different when the key is genuinely new to this
 // object.
 
-import type { Api } from "../model";
+import type { Api, Endpoint } from "../model";
 
 /** `Api`'s field order exactly as declared in `model.rs`'s `struct Api`. */
 export const API_FIELD_ORDER: readonly (keyof Api)[] = [
@@ -37,41 +37,84 @@ export const API_FIELD_ORDER: readonly (keyof Api)[] = [
   "endpoints",
 ];
 
+/** `Endpoint`'s field order exactly as declared in `model.rs`'s `struct
+ * Endpoint`. `headers`/`query`/`variables`/`auth` are all
+ * `#[serde(default)]` with no `skip_serializing_if` — legally absent from
+ * an agent-written or hand-written file (this product's second purpose)
+ * even though `emptyEndpoint` always writes them — so a mutator that does
+ * a plain `ep.field = value` on one of THOSE risks appending it at the end
+ * instead of its declared position, exactly the bug `setApiField` exists
+ * to prevent at the API level. `body` is last in this order (an `Option`
+ * with `skip_serializing_if`), so it has no trailing sibling to be
+ * misordered relative to and a plain assignment is always safe for it. */
+export const ENDPOINT_FIELD_ORDER: readonly (keyof Endpoint)[] = [
+  "id",
+  "name",
+  "method",
+  "path",
+  "headers",
+  "query",
+  "variables",
+  "auth",
+  "body",
+];
+
 /**
- * Sets `api[key] = value`, inserting `key` at its `API_FIELD_ORDER`
- * position if it is not already present on `api` — never at the end by
- * accident.
+ * Sets `obj[key] = value`, inserting `key` at its declared `order` position
+ * if it is not already present on `obj` — never at the end by accident.
  *
  * Implementation: if `key` is already present, this is a plain assignment
  * (updating a value in place never moves its key). If it is absent, every
- * field that `API_FIELD_ORDER` places AT OR AFTER `key` and that already
- * exists on `api` is removed and remembered, `key` is set, and then those
- * remembered fields are set back in their own relative order — which
- * re-inserts them (and therefore `key`, ahead of them) at the very
- * position `API_FIELD_ORDER` says they belong, regardless of how many of
- * them there were or which ones existed.
+ * field that `order` places AT OR AFTER `key` and that already exists on
+ * `obj` is removed and remembered, `key` is set, and then those remembered
+ * fields are set back in their own relative order — which re-inserts them
+ * (and therefore `key`, ahead of them) at the very position `order` says
+ * they belong, regardless of how many of them there were or which ones
+ * existed.
  */
+function setOrderedField<T extends object, K extends keyof T>(
+  obj: T,
+  order: readonly (keyof T)[],
+  key: K,
+  value: T[K],
+): void {
+  if (key in obj) {
+    obj[key] = value;
+    return;
+  }
+  const keyIndex = order.indexOf(key);
+  const trailingFields = keyIndex === -1 ? [] : order.slice(keyIndex + 1);
+  const saved: { field: keyof T; value: unknown }[] = [];
+  for (const field of trailingFields) {
+    if (field in obj) {
+      saved.push({ field, value: obj[field] });
+      delete (obj as Partial<T>)[field];
+    }
+  }
+  obj[key] = value;
+  for (const { field, value: fieldValue } of saved) {
+    (obj as unknown as Record<string, unknown>)[field as string] = fieldValue;
+  }
+}
+
+/** See `setOrderedField` — specialized to `Api`/`API_FIELD_ORDER`. */
 export function setApiField<K extends keyof Api>(
   api: Api,
   key: K,
   value: Api[K],
 ): void {
-  if (key in api) {
-    api[key] = value;
-    return;
-  }
-  const keyIndex = API_FIELD_ORDER.indexOf(key);
-  const trailingFields =
-    keyIndex === -1 ? [] : API_FIELD_ORDER.slice(keyIndex + 1);
-  const saved: { field: keyof Api; value: unknown }[] = [];
-  for (const field of trailingFields) {
-    if (field in api) {
-      saved.push({ field, value: api[field] });
-      delete (api as Partial<Api>)[field];
-    }
-  }
-  api[key] = value;
-  for (const { field, value: fieldValue } of saved) {
-    (api as unknown as Record<string, unknown>)[field] = fieldValue;
-  }
+  setOrderedField(api, API_FIELD_ORDER, key, value);
+}
+
+/** See `setOrderedField` — specialized to `Endpoint`/`ENDPOINT_FIELD_ORDER`.
+ * `ApiForm.svelte`'s `variables`/`environments`/`auth`/`history` mutators
+ * route through `setApiField` for this exact reason; `EndpointForm.svelte`'s
+ * `headers`/`query`/`auth` mutators route through this for the same one,
+ * one level down. */
+export function setEndpointField<K extends keyof Endpoint>(
+  endpoint: Endpoint,
+  key: K,
+  value: Endpoint[K],
+): void {
+  setOrderedField(endpoint, ENDPOINT_FIELD_ORDER, key, value);
 }

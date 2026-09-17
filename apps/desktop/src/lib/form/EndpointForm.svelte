@@ -3,6 +3,7 @@
   import type { Api, Auth, Body, Endpoint, Method } from "../model";
   import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
+  import { setEndpointField } from "./fieldOrder";
   import KeyValueRows from "./KeyValueRows.svelte";
 
   // `api` is the already-parsed document `RequestPanel` computed — passed
@@ -60,13 +61,13 @@
 
   function onHeadersChange(headers: Record<string, string>): void {
     mutateEndpoint((ep) => {
-      ep.headers = headers;
+      setEndpointField(ep, "headers", headers);
     });
   }
 
   function onQueryChange(query: Record<string, string>): void {
     mutateEndpoint((ep) => {
-      ep.query = query;
+      setEndpointField(ep, "query", query);
     });
   }
 
@@ -82,7 +83,7 @@
 
   function onAuthChange(auth: Auth): void {
     mutateEndpoint((ep) => {
-      ep.auth = auth;
+      setEndpointField(ep, "auth", auth);
     });
   }
 </script>
@@ -118,22 +119,40 @@
 
     <section class="fields-section">
       <h3>Headers</h3>
-      <KeyValueRows
-        rows={endpoint.headers}
-        onChange={onHeadersChange}
-        keyLabel="Header"
-        valueLabel="Value"
-      />
+      {#key endpointId}
+        <!-- Same reasoning as `AuthEditor`/`BodyEditor` below: `KeyValueRows`
+             keeps local `$state` (its own ordered `Row[]`, including
+             `hadKey` identity tracking) scoped to whatever record it was
+             handed. Its own echo-vs-external check compares CONTENT only,
+             with no endpoint identity in it — two endpoints whose headers
+             happen to serialize identically (e.g. two untouched `{}`
+             endpoints) would not look like a change to it, so switching
+             endpoints without this `{#key}` could leave endpoint A's
+             half-typed row mounted over endpoint B's editor, and the next
+             keystroke would commit it onto B through `onHeadersChange`'s
+             closed-over `endpointId`. Keying on `endpointId` forces a
+             remount on every endpoint switch, independent of whether the
+             two records collide. -->
+        <KeyValueRows
+          rows={endpoint.headers}
+          onChange={onHeadersChange}
+          keyLabel="Header"
+          valueLabel="Value"
+        />
+      {/key}
     </section>
 
     <section class="fields-section">
       <h3>Query</h3>
-      <KeyValueRows
-        rows={endpoint.query}
-        onChange={onQueryChange}
-        keyLabel="Param"
-        valueLabel="Value"
-      />
+      {#key endpointId}
+        <!-- Same reasoning as Headers above. -->
+        <KeyValueRows
+          rows={endpoint.query}
+          onChange={onQueryChange}
+          keyLabel="Param"
+          valueLabel="Value"
+        />
+      {/key}
     </section>
 
     <section class="fields-section">
