@@ -4,10 +4,16 @@
   import RequestPanel from "./lib/RequestPanel.svelte";
   import ResponsePanel from "./lib/ResponsePanel.svelte";
   import HistoryPanel from "./lib/HistoryPanel.svelte";
+  import SecretsScreen from "./lib/SecretsScreen.svelte";
   import { reload, ui } from "./lib/state.svelte";
 
   let requestPanelRef: RequestPanel | undefined = $state();
   let responsePanelRef: ResponsePanel | undefined = $state();
+  // Owns whether the secrets screen is shown. Mounting/unmounting the
+  // component (rather than just hiding it) is what makes "leaving the screen
+  // re-masks" hold even if a bug skipped the toggle's own re-mask path —
+  // `SecretsScreen`'s `onDestroy` runs whenever this flips back to false.
+  let showSecrets = $state(false);
 
   onMount(() => {
     void reload();
@@ -57,20 +63,26 @@
 </script>
 
 <main class="layout">
-  <Sidebar />
+  <Sidebar onOpenSecrets={() => (showSecrets = true)} />
 
-  <section class="panel request-panel">
-    <RequestPanel bind:this={requestPanelRef} />
-  </section>
+  {#if showSecrets}
+    <section class="panel secrets-panel">
+      <SecretsScreen onClose={() => (showSecrets = false)} />
+    </section>
+  {:else}
+    <section class="panel request-panel">
+      <RequestPanel bind:this={requestPanelRef} />
+    </section>
 
-  <section class="panel response-panel">
-    <div class="response-stack">
-      <div class="response-main">
-        <ResponsePanel bind:this={responsePanelRef} />
+    <section class="panel response-panel">
+      <div class="response-stack">
+        <div class="response-main">
+          <ResponsePanel bind:this={responsePanelRef} />
+        </div>
+        <HistoryPanel />
       </div>
-      <HistoryPanel />
-    </div>
-  </section>
+    </section>
+  {/if}
 </main>
 
 {#if ui.error}
@@ -108,6 +120,11 @@
 
   .request-panel {
     border-right: 1px solid var(--color-border);
+  }
+
+  .secrets-panel {
+    grid-column: 2 / 4;
+    padding: 0;
   }
 
   .global-error {

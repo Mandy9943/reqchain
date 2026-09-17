@@ -12,6 +12,7 @@
   import {
     canSendSelected,
     isSelectionLive,
+    selectedEndpoint,
     sendSelected,
     ui,
   } from "./state.svelte";
@@ -140,11 +141,15 @@
   }
 
   async function handleCopyCurl(): Promise<void> {
+    // `isSelectionLive()` guarantees `selectedEndpoint()` resolves, i.e. the
+    // selection is not an API-only one (`endpointId: null`) — read the id
+    // off the resolved endpoint rather than widening `ui.selected`'s type.
     if (!isSelectionLive()) return;
     const sel = ui.selected;
-    if (!sel) return;
+    const endpoint = selectedEndpoint();
+    if (!sel || !endpoint) return;
     const apiId = sel.apiId;
-    const endpointId = sel.endpointId;
+    const endpointId = endpoint.id;
     const env = ui.env[apiId] ?? null;
 
     copyState = "copying";

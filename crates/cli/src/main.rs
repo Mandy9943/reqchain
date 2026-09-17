@@ -146,7 +146,13 @@ async fn run(
         return ExitCode::from(3);
     }
 
-    let secrets = Secrets::load(paths);
+    let secrets = match Secrets::load(paths) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
+    };
     let secret_values: Vec<String> = secrets.values().cloned().collect();
     let mut executor = Executor::new(Runner::new(), TokenCache::persistent(paths), secrets);
 

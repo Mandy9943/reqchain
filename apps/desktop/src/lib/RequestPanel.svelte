@@ -1,6 +1,7 @@
 <script lang="ts">
   import { lint, previewEndpoint, saveApi, type DiagnosticDto } from "./ipc";
   import {
+    canWriteApiDoc,
     discardLocalChanges,
     selectedApi,
     selectedApiOrRemoved,
@@ -9,15 +10,26 @@
     ui,
   } from "./state.svelte";
   import Editor from "./Editor.svelte";
+  import ApiForm from "./form/ApiForm.svelte";
+  import EndpointForm from "./form/EndpointForm.svelte";
+  import { parseApi } from "./model";
+
+  // Which of the two tabs is showing. Reset to "form" (the default) on every
+  // selection change, below — a user switching endpoints always lands back
+  // on the fields view, not wherever they last left the JSON tab for a
+  // *different* endpoint.
+  let activeTab = $state<"form" | "json">("form");
 
   let diagnostics = $state<DiagnosticDto[]>([]);
   let previewUrl = $state<string | null>(null);
   let previewError = $state<string | null>(null);
   let saveError = $state<string | null>(null);
-  // apiId -> in-flight save. Per-apiId (not a single flag) so saving API A
-  // never blocks — or gets clobbered by — a save of API B started while A
-  // is still pending; a second save of the *same* apiId is refused instead.
-  let savingIds = $state<Record<string, boolean>>({});
+  // In-flight saves live in `ui.savingIds` (state.svelte.ts), not
+  // component-local state: Sidebar's Delete action needs to see them too, to
+  // avoid racing a delete against a save of the same file. Per-apiId (not a
+  // single flag) so saving API A never blocks — or gets clobbered by — a
+  // save of API B started while A is still pending; a second save of the
+  // *same* apiId is refused instead.
   // apiId -> text that was last successfully written to disk by us. Used to
   // adopt the canonical (re-serialized) text once the post-save reload comes
   // back, but only if the user hasn't kept typing in the meantime.
@@ -43,14 +55,32 @@
   const api = $derived(selectedApiOrRemoved());
   const endpoint = $derived(selectedEndpointOrRemoved());
   const isRemoved = $derived(ui.removedSelected !== null);
+  // The API's own header row is selected (`endpointId: null`) — an API
+  // with zero endpoints is always in this state right after creation, since
+  // there is nothing else to select. Task 6 fills this branch with the API
+  // settings form; for now it's a clearly-marked placeholder so the state
+  // is visibly reachable rather than silently falling through to "Select an
+  // endpoint" (which would make a brand-new, endpoint-less API look broken).
+  const isApiOnlySelected = $derived(
+    api !== undefined && ui.selected !== null && ui.selected.endpointId === null,
+  );
   const bufferText = $derived(api ? ui.buffers[api.id] : undefined);
+  // Both tabs render from this buffer (never a second parse path) — see
+  // constraints.md's "one buffer" rule. Computed off `api`/`bufferText`
+  // (which already fall back to the removed-selection snapshot), not
+  // `currentDoc()`, so the parse check keeps working even in the rare case
+  // where the selected endpoint's API is no longer "live" (see the doc
+  // comment in EndpointForm.svelte for why that distinction matters there).
+  const parsedDoc = $derived(
+    api ? parseApi(bufferText ?? api.text) : undefined,
+  );
   const dirty = $derived(
     api !== undefined && bufferText !== undefined && bufferText !== api.text,
   );
   const diskChanged = $derived(
     liveApi !== undefined && !!ui.diskChanged[liveApi.id],
   );
-  const saving = $derived(liveApi ? !!savingIds[liveApi.id] : false);
+  const saving = $derived(liveApi ? !!ui.savingIds[liveApi.id] : false);
 
   // Seed the buffer for a newly selected API, without ever clobbering a
   // buffer the user (or task 10's hot-reload logic) already owns. Only
@@ -95,6 +125,7 @@
     void ui.selected;
     saveError = null;
     diagnostics = [];
+    activeTab = "form";
   });
 
   // Diagnostics strip: relint on every buffer change, debounced. Guarded by
@@ -148,7 +179,10 @@
       return;
     }
     const apiId = sel.apiId;
-    const endpointId = sel.endpointId;
+    // `liveEndpoint` (checked above) guarantees this is a resolved endpoint
+    // selection, not an API-only one — read the id off it rather than
+    // `sel.endpointId`, which is `string | null`.
+    const endpointId = liveEndpoint.id;
     const env = ui.env[apiId] ?? null;
     void previewGeneration;
     const handle = setTimeout(() => {
@@ -181,7 +215,7 @@
     const text = ui.buffers[apiId];
     const current = ui.workspace.apis.find((a) => a.id === apiId);
     if (!current || text === undefined || text === current.text) return false;
-    return !savingIds[apiId]; // a save for this API must not already be in flight
+    return canWriteApiDoc(apiId);
   }
 
   async function handleSave(): Promise<void> {
@@ -196,7 +230,7 @@
     const text = ui.buffers[apiId]!;
 
     const stillSelected = () => selectedApi()?.id === apiId;
-    savingIds[apiId] = true;
+    ui.savingIds[apiId] = true;
     if (stillSelected()) saveError = null;
 
     try {
@@ -228,7 +262,7 @@
         saveError = e instanceof Error ? e.message : String(e);
       }
     } finally {
-      savingIds[apiId] = false;
+      ui.savingIds[apiId] = false;
     }
   }
 
@@ -252,7 +286,100 @@
 </script>
 
 <div class="request-panel-inner">
-  {#if !api || !endpoint}
+  {#if !api}
+    <p class="placeholder">Select an endpoint</p>
+  {:else if isApiOnlySelected}
+    <header class="summary">
+      <div class="summary-row">
+        <span class="api-settings-title">{api.name}</span>
+        {#if diskChanged}
+          <span class="badge badge-disk-changed">changed on disk</span>
+          <button type="button" class="discard-button" onclick={handleDiscard}>
+            Discard mine
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="save-button"
+          disabled={!liveApi || !dirty || saving}
+          onclick={handleSave}
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {#if saveError}
+        <div class="save-error">{saveError}</div>
+      {/if}
+    </header>
+
+    <div class="tab-strip" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "form"}
+        class="tab"
+        class:tab-active={activeTab === "form"}
+        onclick={() => (activeTab = "form")}
+      >
+        Form
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "json"}
+        class="tab"
+        class:tab-active={activeTab === "json"}
+        onclick={() => (activeTab = "json")}
+      >
+        JSON
+      </button>
+    </div>
+
+    <div class="tab-content">
+      {#if activeTab === "form"}
+        {#if !parsedDoc || !parsedDoc.ok}
+          <div class="parse-error">
+            <p>
+              {parsedDoc
+                ? parsedDoc.error
+                : "Nothing to edit — the selection no longer resolves."}
+            </p>
+            {#if parsedDoc}
+              <button
+                type="button"
+                class="switch-to-json"
+                onclick={() => (activeTab = "json")}
+              >
+                Switch to JSON
+              </button>
+            {/if}
+          </div>
+        {:else}
+          {#key parsedDoc.api.id}
+            <ApiForm api={parsedDoc.api} />
+          {/key}
+        {/if}
+      {:else}
+        <div class="editor-wrap">
+          <Editor
+            value={bufferText ?? api.text}
+            onChange={onEditorChange}
+            {diagnostics}
+          />
+        </div>
+      {/if}
+    </div>
+
+    {#if diagnostics.length > 0}
+      <div class="diagnostics">
+        {#each diagnostics as d, i (i)}
+          <div class="diagnostic diagnostic-{d.severity}">
+            {d.path} — {d.message}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  {:else if !endpoint}
     <p class="placeholder">Select an endpoint</p>
   {:else}
     {#if isRemoved}
@@ -299,12 +426,60 @@
       {/if}
     </header>
 
-    <div class="editor-wrap">
-      <Editor
-        value={bufferText ?? api.text}
-        onChange={onEditorChange}
-        {diagnostics}
-      />
+    <div class="tab-strip" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "form"}
+        class="tab"
+        class:tab-active={activeTab === "form"}
+        onclick={() => (activeTab = "form")}
+      >
+        Form
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "json"}
+        class="tab"
+        class:tab-active={activeTab === "json"}
+        onclick={() => (activeTab = "json")}
+      >
+        JSON
+      </button>
+    </div>
+
+    <div class="tab-content">
+      {#if activeTab === "form"}
+        {#if !parsedDoc || !parsedDoc.ok}
+          <div class="parse-error">
+            <p>
+              {parsedDoc
+                ? parsedDoc.error
+                : "Nothing to edit — the selection no longer resolves."}
+            </p>
+            {#if parsedDoc}
+              <button
+                type="button"
+                class="switch-to-json"
+                onclick={() => (activeTab = "json")}
+              >
+                Switch to JSON
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <EndpointForm endpointId={endpoint.id} api={parsedDoc.api} />
+        {/if}
+      {:else}
+        <div class="editor-wrap">
+          <Editor
+            value={bufferText ?? api.text}
+            onChange={onEditorChange}
+            {diagnostics}
+          />
+        </div>
+      {/if}
     </div>
 
     {#if diagnostics.length > 0}
@@ -331,6 +506,15 @@
   .placeholder {
     color: var(--color-text-muted);
     font-style: italic;
+  }
+
+  .api-settings-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    font-size: 0.9rem;
   }
 
   .summary {
@@ -451,8 +635,59 @@
     cursor: pointer;
   }
 
-  .editor-wrap {
+  .tab-strip {
+    flex-shrink: 0;
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .tab {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  .tab-active {
+    color: var(--color-text);
+    border-bottom-color: var(--color-accent);
+  }
+
+  .tab-content {
     flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .parse-error {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--color-error-text);
+    background: var(--color-error-bg);
+    border: 1px solid var(--color-error-text);
+    border-radius: 4px;
+  }
+
+  .switch-to-json {
+    align-self: flex-start;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    cursor: pointer;
+  }
+
+  .editor-wrap {
+    height: 100%;
     min-height: 0;
   }
 

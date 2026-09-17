@@ -19,10 +19,15 @@ fn main() {
             commands::load_workspace,
             commands::lint,
             commands::save_api,
+            commands::delete_api,
             commands::run_endpoint,
             commands::preview_endpoint,
             commands::curl_command,
-            commands::history
+            commands::history,
+            commands::list_secrets,
+            commands::set_secret,
+            commands::delete_secret,
+            commands::reveal_secret
         ])
         .setup(|app| {
             let watcher = reqchain_desktop::watcher::start(app.handle());

@@ -1,6 +1,7 @@
 // Shared UI state (Svelte 5 runes). This is the contract tasks 8-10 build
 // against — keep the exported names stable.
 import { listen } from "@tauri-apps/api/event";
+import { nextEnvSelection } from "./envSelection";
 import {
   loadWorkspace,
   runEndpoint,
@@ -13,7 +14,12 @@ import {
 
 export const ui = $state({
   workspace: { apis: [], errors: [] } as WorkspaceDto,
-  selected: null as { apiId: string; endpointId: string } | null,
+  // `endpointId: null` means the API itself is selected (its header row in
+  // the sidebar) rather than one of its endpoints — the state an API with
+  // zero endpoints is always in right after creation. Every consumer below
+  // must treat that as "no endpoint selected", never crash on it, and never
+  // resolve it to some endpoint by accident.
+  selected: null as { apiId: string; endpointId: string | null } | null,
   // Set by reload() when `selected` pointed at an endpoint that no longer
   // exists after a reload. Holds the last-known api/endpoint so the panel
   // can keep showing it (marked removed) instead of going blank. Cleared
@@ -27,6 +33,19 @@ export const ui = $state({
   // clean save. Never implies the buffer itself was touched — reload()
   // never overwrites a dirty buffer.
   diskChanged: {} as Record<string, boolean>,
+  // apiId -> true while a `save_api` call is in flight for that api —
+  // RequestPanel's Save button/Ctrl+S, or Sidebar's New endpoint/Delete
+  // endpoint (both edit-then-save the same document). apiId -> true while a
+  // `delete_api` call (Sidebar's Delete) is in flight for that api. Shared
+  // here — not component-local state — because these actions live in two
+  // different components (RequestPanel, Sidebar) that all read or write the
+  // same file: without a shared registry, any two of them racing on the
+  // same api can silently drop one write (a just-added endpoint vanishing,
+  // an edit in the JSON tab being overwritten) or resurrect a file
+  // `delete_api` just removed, with no error from either side. See
+  // `canWriteApiDoc` below, the one place that reads both maps.
+  savingIds: {} as Record<string, boolean>,
+  deletingIds: {} as Record<string, boolean>,
   search: "",
   response: null as RunDto | null,
   runError: null as string | null,
@@ -41,9 +60,12 @@ export const ui = $state({
 // calls) rather than a third mechanism.
 let runSeq = 0;
 
-/** Select an endpoint (or clear the selection), resetting reload-tracked flags. */
+/**
+ * Select an endpoint, an API on its own (`endpointId: null`), or clear the
+ * selection — resetting reload-tracked flags.
+ */
 export function select(
-  selection: { apiId: string; endpointId: string } | null,
+  selection: { apiId: string; endpointId: string | null } | null,
 ): void {
   ui.selected = selection;
   ui.removedSelected = null;
@@ -70,6 +92,22 @@ export function canSendSelected(): boolean {
 }
 
 /**
+ * Whether a NEW `saveApi(apiId, ...)` call may safely be started for this
+ * api id right now. The one check shared by every path that writes an
+ * API's document: RequestPanel's Save button/Ctrl+S, and Sidebar's New
+ * endpoint and Delete endpoint (both mutate the buffer via `updateDoc` and
+ * then save it, exactly like a manual JSON edit would). Refuses while
+ * another save for the same api is already in flight (`savingIds`) or while
+ * the whole api is being deleted (`deletingIds`) — without this, two writes
+ * racing on the same file can silently drop one of them (whichever
+ * `saveApi` resolves last wins, with no error from the loser), or a save
+ * can write a file back moments after `delete_api` removed it.
+ */
+export function canWriteApiDoc(apiId: string): boolean {
+  return !ui.savingIds[apiId] && !ui.deletingIds[apiId];
+}
+
+/**
  * Runs the selected endpoint, sharing one implementation (and one sequence
  * counter) between the Send button and the Ctrl+Enter shortcut so the
  * capture-before-await / stale-response-drop logic exists exactly once.
@@ -80,8 +118,11 @@ export async function sendSelected(): Promise<void> {
   // Capture everything the continuation needs off the reactive graph now —
   // the selection can change while the request is in flight, and the
   // response must never land against a different one.
+  // `canSendSelected()` (via `isSelectionLive()`) already guarantees
+  // `selectedEndpoint()` resolves, i.e. `sel.endpointId` is not null here —
+  // read the id off the resolved endpoint rather than re-widening the type.
   const apiId = sel.apiId;
-  const endpointId = sel.endpointId;
+  const endpointId = selectedEndpoint()!.id;
   const env = ui.env[apiId] ?? null;
   const seq = runSeq;
 
@@ -129,21 +170,19 @@ export async function reload(): Promise<void> {
     // without clobbering a choice the user already made — unless that
     // choice no longer names a real environment (e.g. it was removed from
     // the file), in which case it would otherwise linger as a value with no
-    // matching <option>.
+    // matching <option>. `nextEnvSelection` is the ONE place this rule
+    // lives — `ApiForm.svelte`'s environment add/rename/remove (see
+    // `envSelection.ts`'s doc comment) applies the identical rule to the
+    // buffer immediately after an edit, before any save; both call this
+    // same function so the two can't drift apart.
     for (const api of workspace.apis) {
-      const current = ui.env[api.id];
-      const stale =
-        current !== undefined &&
-        current !== null &&
-        !api.environments.includes(current);
-      if (current === undefined || stale) {
-        ui.env[api.id] = api.environments[0] ?? null;
-      }
+      ui.env[api.id] = nextEnvSelection(api.environments, ui.env[api.id]);
     }
 
-    // Selected endpoint survives, marked "removed" if it no longer resolves.
+    // Selected endpoint (or, for an API-only selection, the API itself)
+    // survives, marked "removed" if it no longer resolves.
     if (ui.selected) {
-      if (selectedEndpointIn(workspace, ui.selected)) {
+      if (selectionResolves(workspace, ui.selected)) {
         ui.removedSelected = null;
       } else if (prevSelectedApi && prevSelectedEndpoint) {
         // Keep `ui.selected` and `ui.response` as they are — do not clear
@@ -199,12 +238,21 @@ export function discardLocalChanges(apiId: string): void {
   ui.diskChanged[apiId] = false;
 }
 
-function selectedEndpointIn(
+/**
+ * Whether `selected` still resolves against `workspace`: for an endpoint
+ * selection, the endpoint must still exist under its API; for an API-only
+ * selection (`endpointId: null`), the API itself existing is enough — there
+ * is no endpoint to look up, and there must never be one pretended into
+ * existence.
+ */
+function selectionResolves(
   workspace: WorkspaceDto,
-  selected: { apiId: string; endpointId: string },
+  selected: { apiId: string; endpointId: string | null },
 ): boolean {
   const api = workspace.apis.find((a) => a.id === selected.apiId);
-  return api?.endpoints.some((ep) => ep.id === selected.endpointId) ?? false;
+  if (!api) return false;
+  if (selected.endpointId === null) return true;
+  return api.endpoints.some((ep) => ep.id === selected.endpointId);
 }
 
 export function selectedApi(): ApiDto | undefined {
@@ -212,11 +260,13 @@ export function selectedApi(): ApiDto | undefined {
   return ui.workspace.apis.find((a) => a.id === ui.selected!.apiId);
 }
 
+/** `undefined` both when nothing is selected and for an API-only selection
+ * (`endpointId: null`) — the latter is deliberate: it must never be
+ * mistaken for a resolved endpoint. */
 export function selectedEndpoint(): EndpointDto | undefined {
-  if (!ui.selected) return undefined;
-  return selectedApi()?.endpoints.find(
-    (ep) => ep.id === ui.selected!.endpointId,
-  );
+  if (!ui.selected || ui.selected.endpointId === null) return undefined;
+  const endpointId = ui.selected.endpointId;
+  return selectedApi()?.endpoints.find((ep) => ep.id === endpointId);
 }
 
 /** `selectedApi()`, falling back to the last-known snapshot of a removed selection. */
