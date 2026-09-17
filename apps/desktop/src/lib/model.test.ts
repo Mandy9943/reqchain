@@ -258,6 +258,268 @@ describe("parseApi", () => {
     });
   });
 
+  // Task 5's auth editor: same reasoning as the body-shape block above — a
+  // JSON-tab edit can set `auth` (API-level or per-endpoint) to anything at
+  // all, and `AuthEditor`/`ChainedAuthBuilder` must never be handed a
+  // document this check would have caught.
+  describe("auth shape", () => {
+    function apiWithAuth(auth: string): string {
+      return `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": [
+    { "id": "e", "name": "E", "method": "GET", "path": "/", "auth": ${auth} }
+  ]
+}`;
+    }
+
+    it("accepts an endpoint with auth simply absent (defaults to inherit)", () => {
+      const text = `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": [
+    { "id": "e", "name": "E", "method": "GET", "path": "/" }
+  ]
+}`;
+      expect(parseApi(text).ok).toBe(true);
+    });
+
+    it("accepts an API with auth simply absent (defaults to none)", () => {
+      const text = `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": []
+}`;
+      expect(parseApi(text).ok).toBe(true);
+    });
+
+    it.each(['"oops"', "[]", "null", "1"])("rejects auth set to %s", (bad) => {
+      expect(parseApi(apiWithAuth(bad)).ok).toBe(false);
+    });
+
+    it("rejects an unrecognized auth type tag", () => {
+      const parsed = parseApi(apiWithAuth('{ "type": "made-up" }'));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain("type");
+    });
+
+    it("accepts inherit and none with no other fields", () => {
+      expect(parseApi(apiWithAuth('{ "type": "inherit" }')).ok).toBe(true);
+      expect(parseApi(apiWithAuth('{ "type": "none" }')).ok).toBe(true);
+    });
+
+    it.each(["username", "password"])("rejects basic missing %s", (missing) => {
+      const fields = { username: '"u"', password: '"p"' };
+      delete (fields as Record<string, string>)[missing];
+      const json = `{ "type": "basic", ${Object.entries(fields)
+        .map(([k, v]) => `"${k}": ${v}`)
+        .join(", ")} }`;
+      const parsed = parseApi(apiWithAuth(json));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toContain(missing);
+    });
+
+    it("accepts a well-shaped basic auth", () => {
+      expect(
+        parseApi(apiWithAuth('{ "type": "basic", "username": "u", "password": "p" }'))
+          .ok,
+      ).toBe(true);
+    });
+
+    it("rejects bearer missing token", () => {
+      expect(parseApi(apiWithAuth('{ "type": "bearer" }')).ok).toBe(false);
+    });
+
+    it("rejects header auth whose headers is not an object", () => {
+      expect(parseApi(apiWithAuth('{ "type": "header", "headers": null }')).ok).toBe(
+        false,
+      );
+      expect(parseApi(apiWithAuth('{ "type": "header" }')).ok).toBe(false);
+    });
+
+    it("accepts a well-shaped header auth", () => {
+      expect(
+        parseApi(apiWithAuth('{ "type": "header", "headers": { "X-Api-Key": "1" } }'))
+          .ok,
+      ).toBe(true);
+    });
+
+    it.each(["name", "expression"])("rejects computed missing %s", (missing) => {
+      const fields = { name: '"h"', expression: '"1"' };
+      delete (fields as Record<string, string>)[missing];
+      const json = `{ "type": "computed", ${Object.entries(fields)
+        .map(([k, v]) => `"${k}": ${v}`)
+        .join(", ")} }`;
+      expect(parseApi(apiWithAuth(json)).ok).toBe(false);
+    });
+
+    describe("chained", () => {
+      const source = '"source": { "endpoint": "token" }';
+      const inject =
+        '"inject": { "into": "header", "name": "Authorization", "template": "Bearer {{value}}" }';
+
+      it("accepts the minimal shape — source and inject only, extract/ttl/retryOn all absent", () => {
+        const parsed = parseApi(
+          apiWithAuth(`{ "type": "chained", ${source}, ${inject} }`),
+        );
+        expect(parsed.ok).toBe(true);
+      });
+
+      it("rejects a missing source", () => {
+        const parsed = parseApi(apiWithAuth(`{ "type": "chained", ${inject} }`));
+        expect(parsed.ok).toBe(false);
+        if (parsed.ok) return;
+        expect(parsed.error).toContain("source");
+      });
+
+      it("rejects a source that is not an object", () => {
+        expect(
+          parseApi(
+            apiWithAuth(`{ "type": "chained", "source": "token", ${inject} }`),
+          ).ok,
+        ).toBe(false);
+      });
+
+      it("rejects a source whose endpoint is not a string", () => {
+        expect(
+          parseApi(
+            apiWithAuth(
+              `{ "type": "chained", "source": { "endpoint": 1 }, ${inject} }`,
+            ),
+          ).ok,
+        ).toBe(false);
+      });
+
+      it("rejects a missing inject", () => {
+        const parsed = parseApi(apiWithAuth(`{ "type": "chained", ${source} }`));
+        expect(parsed.ok).toBe(false);
+        if (parsed.ok) return;
+        expect(parsed.error).toContain("inject");
+      });
+
+      it.each([
+        '{ "into": "header", "template": "Bearer {{value}}" }', // missing name
+        '{ "into": "header", "name": "Authorization" }', // missing template
+        '{ "into": "query" }', // missing name (template is optional)
+        '{ "into": "body", "template": "{{value}}" }', // missing pointer
+        '{ "into": "made-up" }',
+      ])("rejects a malformed inject %s", (badInject) => {
+        expect(
+          parseApi(
+            apiWithAuth(`{ "type": "chained", ${source}, "inject": ${badInject} }`),
+          ).ok,
+        ).toBe(false);
+      });
+
+      it("accepts inject.query with template absent (template HAS a serde default)", () => {
+        expect(
+          parseApi(
+            apiWithAuth(
+              `{ "type": "chained", ${source}, "inject": { "into": "query", "name": "token" } }`,
+            ),
+          ).ok,
+        ).toBe(true);
+      });
+
+      it.each([
+        '{ "from": "body", "jsonPath": "$.access_token" }',
+        '{ "from": "body", "regex": "(.+)" }',
+        '{ "from": "header", "name": "X-Token" }',
+        '{ "from": "status" }',
+      ])("accepts a well-shaped extract %s", (goodExtract) => {
+        expect(
+          parseApi(
+            apiWithAuth(
+              `{ "type": "chained", ${source}, "extract": ${goodExtract}, ${inject} }`,
+            ),
+          ).ok,
+        ).toBe(true);
+      });
+
+      it.each([
+        '{ "from": "header" }', // missing name
+        '{ "from": "made-up" }',
+      ])("rejects a malformed extract %s", (badExtract) => {
+        expect(
+          parseApi(
+            apiWithAuth(
+              `{ "type": "chained", ${source}, "extract": ${badExtract}, ${inject} }`,
+            ),
+          ).ok,
+        ).toBe(false);
+      });
+
+      it.each([
+        '{ "from": "body", "jsonPath": "$.expires_in" }',
+        '{ "from": "body", "jsonPath": "$.expires_in", "unit": "milliseconds" }',
+        '{ "from": "fixed", "seconds": 3600 }',
+        '{ "from": "absolute", "jsonPath": "$.expiresAt" }',
+      ])("accepts a well-shaped ttl %s", (goodTtl) => {
+        expect(
+          parseApi(
+            apiWithAuth(`{ "type": "chained", ${source}, "ttl": ${goodTtl}, ${inject} }`),
+          ).ok,
+        ).toBe(true);
+      });
+
+      it.each([
+        '{ "from": "body" }', // missing jsonPath
+        '{ "from": "body", "jsonPath": "$.x", "unit": "days" }', // invalid unit
+        '{ "from": "fixed" }', // missing seconds
+        '{ "from": "made-up" }',
+      ])("rejects a malformed ttl %s", (badTtl) => {
+        expect(
+          parseApi(
+            apiWithAuth(`{ "type": "chained", ${source}, "ttl": ${badTtl}, ${inject} }`),
+          ).ok,
+        ).toBe(false);
+      });
+
+      it("rejects retryOn that is not an array of numbers", () => {
+        expect(
+          parseApi(
+            apiWithAuth(
+              `{ "type": "chained", ${source}, ${inject}, "retryOn": "401" }`,
+            ),
+          ).ok,
+        ).toBe(false);
+        expect(
+          parseApi(
+            apiWithAuth(
+              `{ "type": "chained", ${source}, ${inject}, "retryOn": [401, "403"] }`,
+            ),
+          ).ok,
+        ).toBe(false);
+      });
+
+      it("accepts retryOn simply absent (retry_on HAS a serde default)", () => {
+        expect(
+          parseApi(apiWithAuth(`{ "type": "chained", ${source}, ${inject} }`)).ok,
+        ).toBe(true);
+      });
+    });
+
+    it("rejects API-level auth with the same rules", () => {
+      const text = `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "auth": { "type": "bearer" },
+  "endpoints": []
+}`;
+      expect(parseApi(text).ok).toBe(false);
+    });
+  });
+
   it("preserves a chained auth block through a round trip", () => {
     const text = serializeApi({
       ...emptyApi("a", "A"),

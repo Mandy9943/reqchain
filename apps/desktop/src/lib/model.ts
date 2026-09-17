@@ -158,6 +158,12 @@ export function parseApi(text: string): ParseResult {
   if (!Array.isArray(obj.endpoints)) {
     return { ok: false, error: "missing or invalid \"endpoints\"" };
   }
+  if ("auth" in obj && obj.auth !== undefined) {
+    const authError = validateAuthShape(obj.auth, "auth");
+    if (authError) {
+      return { ok: false, error: authError };
+    }
+  }
   // Deliberately narrow, not a full re-validation of every endpoint field:
   // this exists only to stop a JSON-tab edit that deletes/corrupts
   // `headers`/`query`/`variables` from silently producing `ok: true` and
@@ -192,8 +198,204 @@ export function parseApi(text: string): ParseResult {
         return { ok: false, error: bodyError };
       }
     }
+    if ("auth" in epObj && epObj.auth !== undefined) {
+      const authError = validateAuthShape(epObj.auth, `endpoints[${i}].auth`);
+      if (authError) {
+        return { ok: false, error: authError };
+      }
+    }
   }
   return { ok: true, api: obj as unknown as Api };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireStringField(
+  obj: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  if (typeof obj[field] !== "string") {
+    return `${path}.${field} must be a string`;
+  }
+  return null;
+}
+
+function requireOptionalStringField(
+  obj: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  if (field in obj && obj[field] !== undefined && typeof obj[field] !== "string") {
+    return `${path}.${field} must be a string`;
+  }
+  return null;
+}
+
+function validateChainSourceShape(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  return requireStringField(value, "endpoint", path);
+}
+
+/** `AuthExtract`, discriminated by `from` (model.rs's `#[serde(tag =
+ * "from")]`). Mirrors `Extract`'s field requirements in SPEC.md exactly:
+ * only `header.name` has no serde default. */
+function validateExtractShape(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  switch (value.from) {
+    case "body":
+      return (
+        requireOptionalStringField(value, "jsonPath", path) ??
+        requireOptionalStringField(value, "xpath", path) ??
+        requireOptionalStringField(value, "regex", path)
+      );
+    case "header":
+      return (
+        requireStringField(value, "name", path) ??
+        requireOptionalStringField(value, "regex", path)
+      );
+    case "status":
+      return null;
+    default:
+      return `${path}.from must be one of body, header, status`;
+  }
+}
+
+/** `AuthTtl`, discriminated by `from`. `body.jsonPath`, `fixed.seconds` and
+ * `absolute.jsonPath` all have no serde default — required whenever
+ * present at all. */
+function validateTtlShape(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  switch (value.from) {
+    case "body": {
+      const jsonPathError = requireStringField(value, "jsonPath", path);
+      if (jsonPathError) return jsonPathError;
+      if (
+        "unit" in value &&
+        value.unit !== undefined &&
+        value.unit !== "seconds" &&
+        value.unit !== "milliseconds"
+      ) {
+        return `${path}.unit must be "seconds" or "milliseconds"`;
+      }
+      return null;
+    }
+    case "fixed":
+      if (typeof value.seconds !== "number") {
+        return `${path}.seconds must be a number`;
+      }
+      return null;
+    case "absolute":
+      return requireStringField(value, "jsonPath", path);
+    default:
+      return `${path}.from must be one of body, fixed, absolute`;
+  }
+}
+
+/** `AuthInject`, discriminated by `into`. `header.name`, `header.template`
+ * and `body.pointer` have no serde default; `query`/`body`'s `template`
+ * does (defaults to `"{{value}}"`), so it's optional whenever present. */
+function validateInjectShape(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  switch (value.into) {
+    case "header":
+      return (
+        requireStringField(value, "name", path) ??
+        requireStringField(value, "template", path)
+      );
+    case "query":
+      return (
+        requireStringField(value, "name", path) ??
+        requireOptionalStringField(value, "template", path)
+      );
+    case "body":
+      return (
+        requireStringField(value, "pointer", path) ??
+        requireOptionalStringField(value, "template", path)
+      );
+    default:
+      return `${path}.into must be one of header, query, body`;
+  }
+}
+
+/**
+ * Shallow shape check for `auth` (API-level or per-endpoint), same spirit
+ * and purpose as `validateBodyShape`: a JSON-tab edit can set `auth` to
+ * anything at all, even though `model.ts`'s `Auth` type claims seven closed
+ * variants — this exists to stop such a document from producing `ok: true`
+ * and then either crashing `AuthEditor`/`ChainedAuthBuilder` (e.g. reading
+ * `.username` off a value that was never a `basic` auth at all) or, just as
+ * bad, producing a document that LOOKS fine to this form but that Rust's
+ * `Api::from_json` rejects outright at Save time with a raw `missing
+ * field ...` error.
+ *
+ * Field requirements below mirror exactly which fields `model.rs`'s `Auth`
+ * (and its `ChainSource`/`AuthExtract`/`AuthTtl`/`AuthInject` satellites)
+ * mark `#[serde(default...)]` — a field WITHOUT that attribute has no
+ * fallback on load, so its presence is required here; a field WITH it
+ * (`chained.extract`, `chained.ttl`, `chained.retryOn`, `body-ttl.unit`,
+ * query/body-inject's `template`, `multipart.files`'s cousins in
+ * `validateBodyShape`) is only checked when present, never required — the
+ * same "absent is fine, present-but-wrong is not" rule the
+ * headers/query/variables checks above already follow.
+ *
+ * Not a full re-validation of every variant's semantics (an invalid
+ * `jsonPath`, an unknown `computed` function, a dangling chained
+ * `source.endpoint`, a cycle) — that stays `lint`'s job.
+ */
+function validateAuthShape(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  switch (value.type) {
+    case "inherit":
+    case "none":
+      return null;
+    case "basic":
+      return (
+        requireStringField(value, "username", path) ??
+        requireStringField(value, "password", path)
+      );
+    case "bearer":
+      return requireStringField(value, "token", path);
+    case "header":
+      if (!("headers" in value) || !isPlainObject(value.headers)) {
+        return `${path}.headers must be an object`;
+      }
+      return null;
+    case "computed":
+      return (
+        requireStringField(value, "name", path) ??
+        requireStringField(value, "expression", path)
+      );
+    case "chained": {
+      if (!("source" in value)) return `${path}.source is required`;
+      const sourceError = validateChainSourceShape(value.source, `${path}.source`);
+      if (sourceError) return sourceError;
+      if ("extract" in value && value.extract !== undefined) {
+        const extractError = validateExtractShape(value.extract, `${path}.extract`);
+        if (extractError) return extractError;
+      }
+      if ("ttl" in value && value.ttl !== undefined) {
+        const ttlError = validateTtlShape(value.ttl, `${path}.ttl`);
+        if (ttlError) return ttlError;
+      }
+      if (!("inject" in value)) return `${path}.inject is required`;
+      const injectError = validateInjectShape(value.inject, `${path}.inject`);
+      if (injectError) return injectError;
+      if ("retryOn" in value && value.retryOn !== undefined) {
+        if (
+          !Array.isArray(value.retryOn) ||
+          !value.retryOn.every((n) => typeof n === "number")
+        ) {
+          return `${path}.retryOn must be an array of numbers`;
+        }
+      }
+      return null;
+    }
+    default:
+      return `${path}.type must be one of inherit, none, basic, bearer, header, computed, chained`;
+  }
 }
 
 /**

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { updateDoc } from "../doc.svelte";
-  import type { Api, Body, Endpoint, Method } from "../model";
+  import type { Api, Auth, Body, Endpoint, Method } from "../model";
+  import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
   import KeyValueRows from "./KeyValueRows.svelte";
 
@@ -78,6 +79,12 @@
       }
     });
   }
+
+  function onAuthChange(auth: Auth): void {
+    mutateEndpoint((ep) => {
+      ep.auth = auth;
+    });
+  }
 </script>
 
 {#if !endpoint}
@@ -127,6 +134,29 @@
         keyLabel="Param"
         valueLabel="Value"
       />
+    </section>
+
+    <section class="fields-section">
+      <h3>Auth</h3>
+      {#key endpointId}
+        <!-- Same reasoning as `BodyEditor`'s `{#key}` below: nothing inside
+             `AuthEditor`/`ChainedAuthBuilder` currently holds local
+             `$state` (every field reads straight from `auth` and writes
+             straight through `onChange`), but `KeyValueRows` — used for the
+             `header` auth type — does, and two endpoints whose auth
+             happens to serialize identically (e.g. two untouched
+             `{"type":"inherit"}` endpoints) would not look like a change
+             to its own echo-vs-external check. Keying on `endpointId`
+             forces a remount on every endpoint switch regardless of
+             content collisions. -->
+        <AuthEditor
+          auth={endpoint.auth}
+          onChange={onAuthChange}
+          {api}
+          endpointId={endpoint.id}
+          allowInherit={true}
+        />
+      {/key}
     </section>
 
     <section class="fields-section">
