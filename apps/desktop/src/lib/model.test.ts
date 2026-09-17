@@ -600,6 +600,79 @@ describe("parseApi", () => {
       retryOn: [401],
     });
   });
+
+  // Same class of finding as the per-endpoint headers/query/variables shape
+  // checks above, now for the API-level fields `ApiForm` (task 6) reads
+  // directly: `variables`, `environments`, and `history`.
+  describe("API-level variables/environments/history shape", () => {
+    function apiWith(extra?: string): string {
+      return `{
+  "schemaVersion": 1,
+  "id": "gw",
+  "name": "Gateway",
+  "baseUrl": "https://api.example.com",
+  "endpoints": []${extra ? `,\n  ${extra}` : ""}
+}`;
+    }
+
+    it("rejects a non-object top-level \"variables\"", () => {
+      expect(parseApi(apiWith(`"variables": null`)).ok).toBe(false);
+      expect(parseApi(apiWith(`"variables": []`)).ok).toBe(false);
+      expect(parseApi(apiWith(`"variables": "x"`)).ok).toBe(false);
+    });
+
+    it("accepts a top-level \"variables\" that is simply absent", () => {
+      expect(parseApi(apiWith()).ok).toBe(true);
+    });
+
+    it("rejects a non-array \"environments\"", () => {
+      expect(parseApi(apiWith(`"environments": {}`)).ok).toBe(false);
+    });
+
+    it("rejects an environments entry missing \"name\"", () => {
+      const parsed = parseApi(apiWith(`"environments": [{"variables": {}}]`));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toMatch(/environments\[0\]\.name/);
+    });
+
+    it("rejects an environments entry with a non-object \"variables\"", () => {
+      expect(
+        parseApi(apiWith(`"environments": [{"name": "prod", "variables": null}]`))
+          .ok,
+      ).toBe(false);
+    });
+
+    it("accepts an environments entry whose \"variables\" is simply absent", () => {
+      const parsed = parseApi(apiWith(`"environments": [{"name": "prod"}]`));
+      expect(parsed.ok).toBe(true);
+    });
+
+    it("rejects a non-object \"history\"", () => {
+      expect(parseApi(apiWith(`"history": "x"`)).ok).toBe(false);
+      expect(parseApi(apiWith(`"history": null`)).ok).toBe(false);
+    });
+
+    it("rejects a non-boolean \"history.storeBodies\"", () => {
+      const parsed = parseApi(apiWith(`"history": {"storeBodies": "yes"}`));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.error).toMatch(/storeBodies/);
+    });
+
+    it("accepts \"history\" whose \"storeBodies\" is simply absent", () => {
+      expect(parseApi(apiWith(`"history": {}`)).ok).toBe(true);
+    });
+
+    it("accepts a well-shaped environments/history/variables document", () => {
+      const parsed = parseApi(
+        apiWith(
+          `"variables": {"base": "1"}, "environments": [{"name": "prod", "variables": {"host": "p.example.com"}}], "history": {"storeBodies": false}`,
+        ),
+      );
+      expect(parsed.ok).toBe(true);
+    });
+  });
 });
 
 describe("skeletons", () => {

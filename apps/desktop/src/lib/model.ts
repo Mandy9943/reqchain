@@ -158,6 +158,37 @@ export function parseApi(text: string): ParseResult {
   if (!Array.isArray(obj.endpoints)) {
     return { ok: false, error: "missing or invalid \"endpoints\"" };
   }
+  // Same "present but not an object" defence as the per-endpoint loop below
+  // — `variables` is `#[serde(default)]` (Vars/BTreeMap) with no
+  // `skip_serializing_if`, so it's absent only in older/hand-written files,
+  // never in one Rust wrote; a JSON-tab edit setting it to `null`/an array
+  // must not reach `ApiForm`'s `KeyValueRows.svelte`.
+  if (
+    "variables" in obj &&
+    obj.variables !== undefined &&
+    (typeof obj.variables !== "object" ||
+      obj.variables === null ||
+      Array.isArray(obj.variables))
+  ) {
+    return { ok: false, error: "\"variables\" must be an object" };
+  }
+  if ("environments" in obj && obj.environments !== undefined) {
+    if (!Array.isArray(obj.environments)) {
+      return { ok: false, error: "\"environments\" must be an array" };
+    }
+    for (const [i, env] of obj.environments.entries()) {
+      const envError = validateEnvironmentShape(env, `environments[${i}]`);
+      if (envError) {
+        return { ok: false, error: envError };
+      }
+    }
+  }
+  if ("history" in obj && obj.history !== undefined) {
+    const historyError = validateHistoryShape(obj.history);
+    if (historyError) {
+      return { ok: false, error: historyError };
+    }
+  }
   if ("auth" in obj && obj.auth !== undefined) {
     const authError = validateAuthShape(obj.auth, "auth");
     if (authError) {
@@ -230,6 +261,52 @@ function requireOptionalStringField(
 ): string | null {
   if (field in obj && obj[field] !== undefined && typeof obj[field] !== "string") {
     return `${path}.${field} must be a string`;
+  }
+  return null;
+}
+
+/**
+ * `Environment`, `model.rs`'s `#[serde(deny_unknown_fields)]` struct with
+ * `name: String` (no serde default — required whenever the entry exists at
+ * all) and `variables: Vars` (`#[serde(default)]`, so optional whenever
+ * present). Same purpose as the per-endpoint headers/query/variables loop
+ * above: a JSON-tab edit could otherwise hand `ApiForm` an `environments`
+ * entry with a missing/non-string `name` or a non-object `variables`,
+ * either crashing the form outright or looking fine here and failing at
+ * Save time with a raw serde error instead.
+ */
+function validateEnvironmentShape(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  const nameError = requireStringField(value, "name", path);
+  if (nameError) return nameError;
+  if (
+    "variables" in value &&
+    value.variables !== undefined &&
+    (typeof value.variables !== "object" ||
+      value.variables === null ||
+      Array.isArray(value.variables))
+  ) {
+    return `${path}.variables must be an object`;
+  }
+  return null;
+}
+
+/**
+ * `HistoryConfig`, `model.rs`'s `#[serde(deny_unknown_fields)]` struct with
+ * one field, `storeBodies: bool` (`#[serde(default = "default_true")]` —
+ * optional whenever present, same "absent is fine, present-but-wrong is
+ * not" rule as everything else in this file). `history` itself is
+ * `Option<HistoryConfig>` on `Api`, so it may be absent entirely; this is
+ * only reached when it is present.
+ */
+function validateHistoryShape(value: unknown): string | null {
+  if (!isPlainObject(value)) return "\"history\" must be an object";
+  if (
+    "storeBodies" in value &&
+    value.storeBodies !== undefined &&
+    typeof value.storeBodies !== "boolean"
+  ) {
+    return "\"history\".storeBodies must be a boolean";
   }
   return null;
 }

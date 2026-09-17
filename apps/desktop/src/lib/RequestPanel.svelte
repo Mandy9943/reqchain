@@ -10,6 +10,7 @@
     ui,
   } from "./state.svelte";
   import Editor from "./Editor.svelte";
+  import ApiForm from "./form/ApiForm.svelte";
   import EndpointForm from "./form/EndpointForm.svelte";
   import { parseApi } from "./model";
 
@@ -288,11 +289,96 @@
   {#if !api}
     <p class="placeholder">Select an endpoint</p>
   {:else if isApiOnlySelected}
-    <div class="api-settings-placeholder" data-testid="api-settings-placeholder">
-      <p class="placeholder">
-        <strong>{api.name}</strong> — API settings (coming soon)
-      </p>
+    <header class="summary">
+      <div class="summary-row">
+        <span class="api-settings-title">{api.name}</span>
+        {#if diskChanged}
+          <span class="badge badge-disk-changed">changed on disk</span>
+          <button type="button" class="discard-button" onclick={handleDiscard}>
+            Discard mine
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="save-button"
+          disabled={!liveApi || !dirty || saving}
+          onclick={handleSave}
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {#if saveError}
+        <div class="save-error">{saveError}</div>
+      {/if}
+    </header>
+
+    <div class="tab-strip" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "form"}
+        class="tab"
+        class:tab-active={activeTab === "form"}
+        onclick={() => (activeTab = "form")}
+      >
+        Form
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "json"}
+        class="tab"
+        class:tab-active={activeTab === "json"}
+        onclick={() => (activeTab = "json")}
+      >
+        JSON
+      </button>
     </div>
+
+    <div class="tab-content">
+      {#if activeTab === "form"}
+        {#if !parsedDoc || !parsedDoc.ok}
+          <div class="parse-error">
+            <p>
+              {parsedDoc
+                ? parsedDoc.error
+                : "Nothing to edit — the selection no longer resolves."}
+            </p>
+            {#if parsedDoc}
+              <button
+                type="button"
+                class="switch-to-json"
+                onclick={() => (activeTab = "json")}
+              >
+                Switch to JSON
+              </button>
+            {/if}
+          </div>
+        {:else}
+          {#key parsedDoc.api.id}
+            <ApiForm api={parsedDoc.api} />
+          {/key}
+        {/if}
+      {:else}
+        <div class="editor-wrap">
+          <Editor
+            value={bufferText ?? api.text}
+            onChange={onEditorChange}
+            {diagnostics}
+          />
+        </div>
+      {/if}
+    </div>
+
+    {#if diagnostics.length > 0}
+      <div class="diagnostics">
+        {#each diagnostics as d, i (i)}
+          <div class="diagnostic diagnostic-{d.severity}">
+            {d.path} — {d.message}
+          </div>
+        {/each}
+      </div>
+    {/if}
   {:else if !endpoint}
     <p class="placeholder">Select an endpoint</p>
   {:else}
@@ -422,10 +508,13 @@
     font-style: italic;
   }
 
-  .api-settings-placeholder {
-    border: 1px dashed var(--color-border);
-    border-radius: 4px;
-    padding: 1rem;
+  .api-settings-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    font-size: 0.9rem;
   }
 
   .summary {
