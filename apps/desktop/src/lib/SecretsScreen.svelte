@@ -27,6 +27,22 @@
   // could leak.
   const MASK = "••••••••";
 
+  // Below this, a value is never masked ANYWHERE — the effective request,
+  // the curl export, the auth trace, the history file — because
+  // `request::MIN_MASKABLE_LEN` (core) skips substrings shorter than this
+  // from the global mask list entirely. The screen's own copy above claims
+  // "everything else stays masked"; a value this short quietly breaks that
+  // promise, so the add/edit forms warn about it explicitly rather than
+  // let the user find out from an unmasked response later.
+  const MIN_MASKABLE_LEN = 6;
+
+  // Plain (non-reactive) flag, not `$state`: it only needs to be READ once,
+  // synchronously, right after an `await` resolves — see `toggleShow`. Using
+  // `$state` here would work too, but this is not something the template
+  // renders from, so there is no reason to route it through Svelte's
+  // reactivity.
+  let destroyed = false;
+
   let names = $state<string[]>([]);
   let loadError = $state<string | null>(null);
   let loading = $state(true);
@@ -71,25 +87,47 @@
     reMask();
     revealBusy = name;
     try {
-      revealedValue = await revealSecret(name);
+      const value = await revealSecret(name);
+      // The component may have been unmounted (the user clicked Close)
+      // while this IPC call was in flight. Writing into `$state` after
+      // that is at best wasted and at worst reintroduces the very thing
+      // `onDestroy(reMask)` exists to prevent — a revealed value landing
+      // in memory after "leaving the screen" was supposed to have cleared
+      // it. Check the flag `onDestroy` sets before ever assigning.
+      if (destroyed) return;
+      revealedValue = value;
       revealedName = name;
     } catch (e) {
+      if (destroyed) return;
       revealErrorName = name;
       revealError = e instanceof Error ? e.message : String(e);
     } finally {
-      revealBusy = null;
+      if (!destroyed) revealBusy = null;
     }
+  }
+
+  /** `null` when `value` is fine to submit; otherwise the warning to show. */
+  function shortValueWarning(value: string): string | null {
+    if (value.length === 0 || value.length >= MIN_MASKABLE_LEN) return null;
+    return (
+      `Shorter than ${MIN_MASKABLE_LEN} characters — this value will NOT be ` +
+      `masked anywhere (the effective request, the curl export, the auth ` +
+      `trace, or history). Everything else on this screen assumes masking ` +
+      `applies; for a value this short, it doesn't.`
+    );
   }
 
   // --- Add / edit ------------------------------------------------------
   let editingName = $state<string | null>(null);
   let editValue = $state("");
+  let editValueVisible = $state(false);
   let editBusy = $state(false);
   let editError = $state<string | null>(null);
 
   let addingNew = $state(false);
   let newName = $state("");
   let newValue = $state("");
+  let newValueVisible = $state(false);
   let newError = $state<string | null>(null);
   let newBusy = $state(false);
 
@@ -97,6 +135,7 @@
     addingNew = true;
     newName = "";
     newValue = "";
+    newValueVisible = false;
     newError = null;
   }
 
@@ -104,6 +143,7 @@
     addingNew = false;
     newName = "";
     newValue = "";
+    newValueVisible = false;
     newError = null;
   }
 
@@ -115,6 +155,13 @@
     }
     if (names.includes(name)) {
       newError = `A secret named "${name}" already exists — use Edit instead.`;
+      return;
+    }
+    // An empty value here would create a secret that immediately fails
+    // every request referencing it — the backend rejects this too, but
+    // catching it before the round trip gives a clearer message.
+    if (newValue.length === 0) {
+      newError = "Enter a value — an empty secret is not allowed.";
       return;
     }
     newBusy = true;
@@ -136,16 +183,27 @@
     // new value; if they need to see the old one first, they use Show.
     editingName = name;
     editValue = "";
+    editValueVisible = false;
     editError = null;
   }
 
   function cancelEdit(): void {
     editingName = null;
     editValue = "";
+    editValueVisible = false;
     editError = null;
   }
 
   async function submitEdit(name: string): Promise<void> {
+    // An empty value would silently wipe a live credential while the row
+    // still shows the same fixed-width mask — indistinguishable from "this
+    // secret still has a value" until the next request 401s, which is
+    // exactly the failure this screen exists to help diagnose.
+    if (editValue.length === 0) {
+      editError =
+        "Enter a value — leaving this blank would wipe the secret, not edit it.";
+      return;
+    }
     editBusy = true;
     editError = null;
     try {
@@ -206,7 +264,10 @@
 
   void load();
 
-  onDestroy(reMask);
+  onDestroy(() => {
+    destroyed = true;
+    reMask();
+  });
 </script>
 
 <div class="secrets-screen">
@@ -222,6 +283,13 @@
     workspace. This screen exists so you can check a stored credential
     without a terminal — reveal one entry at a time; leaving this screen
     re-masks everything.
+  </p>
+  <p class="hint">
+    Rotating or deleting a secret used by a <strong>chained</strong> auth's
+    source endpoint takes effect on the next token fetch, not necessarily the
+    very next run — a cached token from the old credential stays valid until
+    its own TTL expires. A directly-interpolated <code>{"{{secret:NAME}}"}</code>
+    elsewhere (a header, a static auth field) takes effect immediately.
   </p>
 
   {#if loading}
@@ -280,13 +348,22 @@
           {#if editingName === name}
             <div class="edit-row">
               <input
-                type="text"
+                type={editValueVisible ? "text" : "password"}
                 class="edit-input"
                 placeholder="New value"
                 aria-label={`New value for ${name}`}
+                autocomplete="off"
+                spellcheck="false"
                 bind:value={editValue}
                 disabled={editBusy}
               />
+              <button
+                type="button"
+                class="link-button"
+                onclick={() => (editValueVisible = !editValueVisible)}
+              >
+                {editValueVisible ? "Hide" : "Show"}
+              </button>
               <button
                 type="button"
                 class="confirm-button"
@@ -304,6 +381,9 @@
                 Cancel
               </button>
             </div>
+            {#if shortValueWarning(editValue)}
+              <p class="inline-warning">{shortValueWarning(editValue)}</p>
+            {/if}
             {#if editError}
               <p class="inline-error">{editError}</p>
             {/if}
@@ -355,17 +435,28 @@
             class="new-input"
             placeholder="Name (e.g. GW_PASS)"
             aria-label="New secret name"
+            autocomplete="off"
+            spellcheck="false"
             bind:value={newName}
             disabled={newBusy}
           />
           <input
-            type="text"
+            type={newValueVisible ? "text" : "password"}
             class="new-input"
             placeholder="Value"
             aria-label="New secret value"
+            autocomplete="off"
+            spellcheck="false"
             bind:value={newValue}
             disabled={newBusy}
           />
+          <button
+            type="button"
+            class="link-button"
+            onclick={() => (newValueVisible = !newValueVisible)}
+          >
+            {newValueVisible ? "Hide" : "Show"}
+          </button>
           <button
             type="button"
             class="confirm-button"
@@ -383,6 +474,9 @@
             Cancel
           </button>
         </div>
+        {#if shortValueWarning(newValue)}
+          <p class="inline-warning">{shortValueWarning(newValue)}</p>
+        {/if}
         {#if newError}
           <p class="inline-error">{newError}</p>
         {/if}
@@ -601,6 +695,15 @@
     margin: 0.35rem 0 0;
     font-size: 0.78rem;
     color: var(--color-error-text);
+  }
+
+  .inline-warning {
+    margin: 0.35rem 0 0;
+    font-size: 0.78rem;
+    color: var(--color-error-text);
+    background: var(--color-error-bg);
+    border-radius: 4px;
+    padding: 0.3rem 0.5rem;
   }
 
   .empty-state {

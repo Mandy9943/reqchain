@@ -170,9 +170,22 @@ fn find_api(state: &AppState, api_id: &str) -> Result<Api, String> {
 /// would corrupt unrelated request output (the phase 1 regression this
 /// design avoids repeating). See `response_mask` for the broader list used
 /// on anything a server sent back.
-fn request_mask(state: &AppState, executor: &Executor) -> Vec<String> {
+///
+/// Reads secret values from `executor.secret_values()` — the EXECUTOR's own
+/// `Secrets` snapshot, the same one it just resolved `{{secret:...}}`
+/// against — never from a separate copy such as `state.secrets`. Those two
+/// can only be kept in sync by convention (every writer remembering to call
+/// `reload()`); reading the mask from any copy other than the one that
+/// built the request would turn one missed `reload()` into a live
+/// credential going out on the wire while its own mask still thinks the
+/// OLD value is the sensitive one. Deriving both from the same `Executor`
+/// makes that impossible by construction — a stale snapshot is then only
+/// ever a correctness bug (the wrong secret is sent), never a disclosure
+/// one (whatever IS sent is always in this mask, because this mask always
+/// reads the value the request actually used).
+fn request_mask(executor: &Executor) -> Vec<String> {
     let mut mask = executor.derived_values();
-    mask.extend(state.secrets.lock().unwrap().values().cloned());
+    mask.extend(executor.secret_values());
     mask
 }
 
@@ -181,8 +194,8 @@ fn request_mask(state: &AppState, executor: &Executor) -> Vec<String> {
 /// `request_mask` extended with `executor.static_values()`, since a server
 /// can echo a static auth credential verbatim in its response even though
 /// that value never joins the request-display mask.
-fn response_mask(state: &AppState, executor: &Executor) -> Vec<String> {
-    let mut mask = request_mask(state, executor);
+fn response_mask(executor: &Executor) -> Vec<String> {
+    let mut mask = request_mask(executor);
     mask.extend(executor.static_values());
     mask
 }
@@ -196,8 +209,8 @@ fn response_mask(state: &AppState, executor: &Executor) -> Vec<String> {
 /// echoes back a rejected credential), and `exec::ExecError::Transport`'s
 /// message is built from `reqwest`'s `Display`, which appends the request
 /// URL — carrying a query-injected chain token in full.
-fn redact_error(state: &AppState, executor: &Executor, error: impl std::fmt::Display) -> String {
-    let mask = response_mask(state, executor);
+fn redact_error(executor: &Executor, error: impl std::fmt::Display) -> String {
+    let mask = response_mask(executor);
     reqchain_core::request::redact_display(&error.to_string(), &mask)
 }
 
@@ -211,11 +224,11 @@ pub async fn run_endpoint_inner(
     let mut executor = state.executor.lock().await;
     let result = match executor.run(&api, endpoint_id, env.as_deref()).await {
         Ok(result) => result,
-        Err(e) => return Err(redact_error(state, &executor, e)),
+        Err(e) => return Err(redact_error(&executor, e)),
     };
 
-    let request_mask = request_mask(state, &executor);
-    let response_mask = response_mask(state, &executor);
+    let request_mask = request_mask(&executor);
+    let response_mask = response_mask(&executor);
     let auth_headers = executor.auth_headers();
     let dto = RunDto::from_result(&result, &request_mask, &response_mask, &auth_headers);
 
@@ -246,9 +259,9 @@ pub async fn preview_endpoint_inner(
     // renders the chained value as a placeholder and performs no I/O.
     let req = match executor.preview(&api, endpoint_id, env.as_deref()).await {
         Ok(req) => req,
-        Err(e) => return Err(redact_error(state, &executor, e)),
+        Err(e) => return Err(redact_error(&executor, e)),
     };
-    let mask = request_mask(state, &executor);
+    let mask = request_mask(&executor);
     let auth_headers = executor.auth_headers();
     Ok(EffectiveDto::from_masked(
         &req.masked_with(&mask, &auth_headers),
@@ -267,9 +280,9 @@ pub async fn curl_command_inner(
     // carry the real effective request, chain resolved (spec §8).
     let req = match executor.prepare(&api, endpoint_id, env.as_deref()).await {
         Ok(req) => req,
-        Err(e) => return Err(redact_error(state, &executor, e)),
+        Err(e) => return Err(redact_error(&executor, e)),
     };
-    let mask = request_mask(state, &executor);
+    let mask = request_mask(&executor);
     let auth_headers = executor.auth_headers();
     let masked = req.masked_with(&mask, &auth_headers);
     Ok(to_shell_command(&masked))
@@ -282,13 +295,63 @@ pub fn history_inner(state: &AppState, api_id: &str, endpoint_id: &str) -> Vec<H
 /// Names only — this is the reason `list_secrets` returns `Vec<String>`
 /// rather than the `Secrets` map itself or any DTO wrapping it: there must be
 /// no code path in this function that can reach a value.
-pub fn list_secrets_inner(state: &AppState) -> Vec<String> {
-    state.secrets.lock().unwrap().names()
+///
+/// Refuses (rather than silently reporting a possibly-stale or empty list)
+/// when the last load of `secrets.json` found it present but unparseable —
+/// see `AppState::secrets_error` — so the screen surfaces the corruption
+/// instead of looking like "no secrets stored yet".
+pub fn list_secrets_inner(state: &AppState) -> Result<Vec<String>, String> {
+    if let Some(err) = state.secrets_error.lock().unwrap().clone() {
+        return Err(err);
+    }
+    Ok(state.secrets.lock().unwrap().names())
 }
 
+/// Mirrors `validate_api_id`'s posture (commit that introduced it): the
+/// frontend is a convenience, not a security or correctness boundary, so
+/// Rust refuses on its own rather than trusting whatever a caller (a
+/// user-typed name, or an agent driving the IPC surface directly) sends.
+/// `{{`/`}}` and whitespace are rejected because a name containing either
+/// can never match `{{secret:NAME}}` at interpolation time (`vars.rs` trims
+/// the inside and looks up the trimmed text verbatim) — such a name could
+/// be stored but never resolved, silently, which is worse than refusing it
+/// up front.
 fn validate_secret_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("secret name must not be empty".to_string());
+    }
+    if name.contains("{{") || name.contains("}}") {
+        return Err(format!(
+            "secret name `{name}` must not contain `{{{{` or `}}}}`"
+        ));
+    }
+    if name.chars().any(char::is_whitespace) {
+        return Err(format!("secret name `{name}` must not contain whitespace"));
+    }
+    Ok(())
+}
+
+/// An empty value is accepted by neither form field in the screen, but Rust
+/// refuses it too rather than trusting that boundary — an empty credential
+/// is never legitimate, and silently accepting one here would let a blank
+/// Edit submission wipe a live secret while the row still shows the mask
+/// (indistinguishable from "this secret has a value").
+fn validate_secret_value(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("secret value must not be empty".to_string());
+    }
+    Ok(())
+}
+
+/// Refuses to write when the last load of `secrets.json` found it present
+/// but unparseable: `Secrets::save` writes the WHOLE map, so proceeding
+/// would silently overwrite (destroy) whatever the corrupted file still
+/// held with just the one edit this call is making.
+fn require_secrets_parsed(state: &AppState) -> Result<(), String> {
+    if let Some(err) = state.secrets_error.lock().unwrap().clone() {
+        return Err(format!(
+            "{err} — fix or remove the file before editing secrets here"
+        ));
     }
     Ok(())
 }
@@ -297,28 +360,43 @@ fn validate_secret_name(name: &str) -> Result<(), String> {
 /// `Secrets` snapshot (`AppState::reload`'s doc comment) picks it up
 /// immediately — a secret set through this command must be usable by the
 /// very next run, not just the next app restart.
+///
+/// Mutates a CLONE of `state.secrets`, saves THAT, and only reloads
+/// (refreshing both `state.secrets` and the executor's snapshot together)
+/// once the save has actually succeeded. Mutating `state.secrets` in place
+/// before saving — the previous shape of this function — left the mask
+/// source (`state.secrets`) and the request source (the executor's own,
+/// separately-held snapshot) disagreeing on any save failure (a full disk,
+/// a read-only filesystem, a permissions error): `state.secrets` would hold
+/// the NEW value while the executor kept resolving requests against the
+/// OLD one, so the OLD credential would go out on the wire while nothing
+/// in `request_mask`/`response_mask` still knew to redact it.
 pub async fn set_secret_inner(state: &AppState, name: &str, value: &str) -> Result<(), String> {
     validate_secret_name(name)?;
-    {
-        let mut secrets = state.secrets.lock().unwrap();
-        secrets.set(name, value.to_string());
-        secrets.save(&state.paths).map_err(|e| e.to_string())?;
-    }
+    validate_secret_value(value)?;
+    require_secrets_parsed(state)?;
+    let mut secrets = state.secrets.lock().unwrap().clone();
+    secrets.set(name, value.to_string());
+    secrets.save(&state.paths).map_err(|e| e.to_string())?;
     state.reload().await;
     Ok(())
 }
 
 /// Deletes a secret and reloads, for the same staleness reason as
-/// `set_secret_inner`.
+/// `set_secret_inner` — and the same clone-then-save-then-reload ordering,
+/// for the same reason: a save failure here must never leave the value
+/// gone from `state.secrets` (and so from every mask) while it is still
+/// live in the executor's own snapshot, which would be the worse direction
+/// of the same bug — a credential un-redacted BECAUSE it was believed
+/// already deleted.
 pub async fn delete_secret_inner(state: &AppState, name: &str) -> Result<(), String> {
     validate_secret_name(name)?;
-    {
-        let mut secrets = state.secrets.lock().unwrap();
-        if !secrets.remove(name) {
-            return Err(format!("secret `{name}` not found"));
-        }
-        secrets.save(&state.paths).map_err(|e| e.to_string())?;
+    require_secrets_parsed(state)?;
+    let mut secrets = state.secrets.lock().unwrap().clone();
+    if !secrets.remove(name) {
+        return Err(format!("secret `{name}` not found"));
     }
+    secrets.save(&state.paths).map_err(|e| e.to_string())?;
     state.reload().await;
     Ok(())
 }
@@ -401,7 +479,7 @@ pub async fn delete_api(state: tauri::State<'_, AppState>, api_id: String) -> Re
 }
 
 #[tauri::command]
-pub fn list_secrets(state: tauri::State<AppState>) -> Vec<String> {
+pub fn list_secrets(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
     list_secrets_inner(&state)
 }
 

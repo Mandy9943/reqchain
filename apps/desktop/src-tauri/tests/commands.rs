@@ -197,7 +197,7 @@ async fn delete_api_rejects_a_path_traversal_id() {
 #[tokio::test]
 async fn listing_secrets_never_returns_a_value() {
     let (_d, state) = state_with_secrets(&[("GW_PASS", "hunter2")]);
-    let names = commands::list_secrets_inner(&state);
+    let names = commands::list_secrets_inner(&state).unwrap();
     assert_eq!(names, vec!["GW_PASS".to_string()]);
     let json = serde_json::to_string(&names).unwrap();
     assert!(!json.contains("hunter2"));
@@ -262,6 +262,35 @@ async fn set_secret_rejects_an_empty_name() {
     assert!(err.contains("empty"));
 }
 
+/// Mirrors `validate_api_id`'s posture: a name that could never match
+/// `{{secret:NAME}}` at interpolation time (because `vars.rs` trims the
+/// inside and looks up the trimmed text verbatim) must be refused rather
+/// than silently stored-but-unreachable.
+#[tokio::test]
+async fn set_secret_rejects_a_name_with_braces_or_whitespace() {
+    let (_d, state) = state_with_secrets(&[]);
+    for bad in ["{{PASS}}", "PA SS", "secret:PASS}}"] {
+        let err = commands::set_secret_inner(&state, bad, "v")
+            .await
+            .unwrap_err();
+        assert!(!err.is_empty(), "expected `{bad}` to be rejected");
+    }
+}
+
+/// An empty value would let a blank Edit submission silently wipe a live
+/// credential while the row still shows the mask — see task-7's review
+/// finding 9.
+#[tokio::test]
+async fn set_secret_rejects_an_empty_value() {
+    let (_d, state) = state_with_secrets(&[("A", "1")]);
+    let err = commands::set_secret_inner(&state, "A", "")
+        .await
+        .unwrap_err();
+    assert!(err.contains("empty"));
+    // And the existing value must survive the rejected attempt.
+    assert_eq!(commands::reveal_secret_inner(&state, "A").unwrap(), "1");
+}
+
 #[tokio::test]
 async fn delete_secret_reports_an_unknown_name_instead_of_succeeding_quietly() {
     let (_d, state) = state_with_secrets(&[("A", "1")]);
@@ -269,18 +298,24 @@ async fn delete_secret_reports_an_unknown_name_instead_of_succeeding_quietly() {
         .await
         .unwrap_err();
     assert!(err.contains("nope"));
-    assert_eq!(commands::list_secrets_inner(&state), vec!["A".to_string()]);
+    assert_eq!(
+        commands::list_secrets_inner(&state).unwrap(),
+        vec!["A".to_string()]
+    );
 }
 
 #[tokio::test]
 async fn delete_secret_removes_it_and_persists() {
     let (dir, state) = state_with_secrets(&[("A", "1"), ("B", "2")]);
     commands::delete_secret_inner(&state, "A").await.unwrap();
-    assert_eq!(commands::list_secrets_inner(&state), vec!["B".to_string()]);
+    assert_eq!(
+        commands::list_secrets_inner(&state).unwrap(),
+        vec!["B".to_string()]
+    );
 
     // Persisted to disk, not just the in-memory snapshot.
     let paths = Paths::at(dir.path());
-    let reloaded = reqchain_core::secrets::Secrets::load(&paths);
+    let reloaded = reqchain_core::secrets::Secrets::load(&paths).unwrap();
     assert_eq!(reloaded.names(), vec!["B".to_string()]);
 }
 
@@ -301,8 +336,160 @@ async fn set_secret_persists_to_disk_with_0600_permissions() {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
-    let reloaded = reqchain_core::secrets::Secrets::load(&paths);
+    let reloaded = reqchain_core::secrets::Secrets::load(&paths).unwrap();
     assert_eq!(reloaded.get("A"), Some("value"));
+}
+
+/// Review finding 1/2: on a FAILED save, `state.secrets` and the executor's
+/// own snapshot must not end up disagreeing. The store loads fine at
+/// startup (so this isn't `secrets_error`'s corrupt-file path); the save
+/// itself is then forced to fail by revoking write permission on the
+/// secrets directory (an EACCES stand-in for the ENOSPC/EROFS the review
+/// named — no adversary needed, just a full disk or a read-only mount).
+/// Both `state.secrets` (what `list_secrets`/`reveal_secret` read) and the
+/// executor's own snapshot (what a run actually sends) must still agree on
+/// the ORIGINAL value afterwards — proven by running for real against a
+/// mock that only accepts it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_save_leaves_state_and_the_executor_agreeing_on_the_old_value() {
+    use std::os::unix::fs::PermissionsExt;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const ORIGINAL: &str = "original-value";
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/secure"))
+        .and(header("x-secret", ORIGINAL))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&mock)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    std::fs::create_dir_all(paths.apis_dir()).unwrap();
+    let text = format!(
+        r#"{{"schemaVersion":1,"id":"demo","name":"Demo","baseUrl":"{}",
+        "endpoints":[
+          {{"id":"secure","name":"Secure","method":"GET","path":"/secure",
+            "headers":{{"X-Secret":"{{{{secret:PASS}}}}"}}}}]}}"#,
+        mock.uri()
+    );
+    std::fs::write(paths.apis_dir().join("demo.json"), text).unwrap();
+    std::fs::write(
+        paths.secrets_file(),
+        serde_json::json!({ "PASS": ORIGINAL }).to_string(),
+    )
+    .unwrap();
+    let state = AppState::new(paths);
+    // Loaded cleanly — this test is about a SAVE failure, not a corrupt file.
+    assert!(state.secrets_error.lock().unwrap().is_none());
+
+    // Revoke write (and execute, so a new dirent truly cannot be created)
+    // permission on the root directory: `secrets_file()`'s parent already
+    // exists, so `create_dir_all` is a no-op, but the temp file's
+    // `create_new` inside it must now fail.
+    let root_perms = std::fs::metadata(dir.path()).unwrap().permissions();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    // Directory permissions do nothing against a process running as root
+    // (as some sandboxes/CI do) — probe first and skip rather than produce
+    // a false failure in that environment.
+    let probe = dir.path().join("write-probe");
+    let permissions_enforced = std::fs::write(&probe, "x").is_err();
+    let _ = std::fs::remove_file(&probe);
+    if !permissions_enforced {
+        std::fs::set_permissions(dir.path(), root_perms).unwrap();
+        eprintln!(
+            "skipping a_failed_save_leaves_state_and_the_executor_agreeing_on_the_old_value: \
+             directory permissions are not enforced for this process (running as root?)"
+        );
+        return;
+    }
+
+    let result = commands::set_secret_inner(&state, "PASS", "new-value").await;
+
+    // Restore permissions immediately so the tempdir can still be cleaned up
+    // even if an assertion below panics.
+    std::fs::set_permissions(dir.path(), root_perms).unwrap();
+
+    let err = result.unwrap_err();
+    assert!(!err.is_empty());
+
+    // `state.secrets` must not have been mutated ahead of the failed save.
+    assert_eq!(
+        commands::reveal_secret_inner(&state, "PASS").unwrap(),
+        ORIGINAL,
+        "a failed save must not have mutated state.secrets"
+    );
+
+    // And the EXECUTOR's own snapshot must still agree — proven by actually
+    // running against a mock that only accepts the original value.
+    let run = commands::run_endpoint_inner(&state, "demo", "secure", None)
+        .await
+        .unwrap();
+    assert_eq!(run.status, 200);
+}
+
+/// Review finding 3: the delete direction of the staleness contract had no
+/// test — only `a_secret_set_through_the_command_is_visible_to_the_next_run`
+/// covered SET. This proves delete propagates to the executor too: a run
+/// that succeeded while the secret existed must fail with an unresolved
+/// variable once it's deleted, and neither the response nor the history
+/// file may carry the old value in plaintext.
+#[tokio::test]
+async fn a_secret_deleted_through_the_command_is_gone_from_the_next_run() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const VALUE: &str = "will-be-deleted-value";
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/secure"))
+        .and(header("x-secret", VALUE))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&mock)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    std::fs::create_dir_all(paths.apis_dir()).unwrap();
+    let text = format!(
+        r#"{{"schemaVersion":1,"id":"demo","name":"Demo","baseUrl":"{}",
+        "endpoints":[
+          {{"id":"secure","name":"Secure","method":"GET","path":"/secure",
+            "headers":{{"X-Secret":"{{{{secret:PASS}}}}"}}}}]}}"#,
+        mock.uri()
+    );
+    std::fs::write(paths.apis_dir().join("demo.json"), text).unwrap();
+    let state = AppState::new(paths);
+
+    commands::set_secret_inner(&state, "PASS", VALUE)
+        .await
+        .unwrap();
+    let first = commands::run_endpoint_inner(&state, "demo", "secure", None)
+        .await
+        .unwrap();
+    assert_eq!(first.status, 200);
+
+    commands::delete_secret_inner(&state, "PASS").await.unwrap();
+
+    let err = commands::run_endpoint_inner(&state, "demo", "secure", None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("PASS"),
+        "expected an unresolved-secret error naming PASS: {err}"
+    );
+    assert!(!err.contains(VALUE));
+
+    let raw = std::fs::read_to_string(state.paths.history_dir().join("demo").join("secure.jsonl"))
+        .unwrap_or_default();
+    assert!(
+        !raw.contains(VALUE),
+        "deleted secret's old value leaked into history: {raw}"
+    );
 }
 
 #[test]

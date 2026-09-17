@@ -68,6 +68,20 @@ impl Executor {
         self.secrets = secrets;
     }
 
+    /// Every value in THIS executor's own `Secrets` snapshot — the same one
+    /// `run`/`preview`/`prepare` actually interpolate `{{secret:...}}`
+    /// against. Callers building a mask for a request THIS executor built
+    /// must read the mask from here, not from some other copy of `Secrets`
+    /// (e.g. `AppState.secrets`): the request and its mask must be provably
+    /// derived from the same store, or a caller that updates one without
+    /// the other (which every previous version of this task's "must call
+    /// reload()" rule relied on someone remembering to do correctly) can
+    /// send a credential on the wire that nothing on the display side knows
+    /// to redact.
+    pub fn secret_values(&self) -> Vec<String> {
+        self.secrets.values().cloned().collect()
+    }
+
     /// Every token this executor has derived from an auth response. They are not
     /// in the secret store, so callers must add them to the mask list before
     /// displaying a request, a response or a shell export.
