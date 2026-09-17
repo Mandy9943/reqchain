@@ -59,14 +59,41 @@ fn saving_never_leaves_a_temp_file_behind() {
 #[test]
 fn save_sets_the_mode_at_open_time_not_via_a_later_chmod() {
     let src = include_str!("../src/secrets.rs");
+    // Scoped to `write_temp_file` itself (to the end of the file, where it's
+    // defined — both the unix and non-unix variants), not the whole module:
+    // a broader scan could pass by accident on unrelated code mentioning
+    // these same substrings (a doc comment, an unrelated helper) without
+    // actually pinning the property of the function that matters.
+    let start = src
+        .find("fn write_temp_file")
+        .expect("write_temp_file must exist in secrets.rs");
+    let write_temp_file_src = &src[start..];
+
     assert!(
-        src.contains(".mode(0o600)"),
-        "save() must open the temp file with an explicit 0600 mode, not rely on the umask"
+        write_temp_file_src.contains(".mode(0o600)"),
+        "write_temp_file must open with an explicit 0600 mode, not rely on the umask"
+    );
+    // The symlink-planting property (finding 5) has the same
+    // runtime-unobservability problem as the mode-at-open-time one: a
+    // symlink attack can only be exercised against a PREDICTABLE temp
+    // path, and the current naming scheme (nanoseconds + a counter) is
+    // deliberately not predictable, so a runtime test can only ever cover
+    // the OLD pid-only scheme (see
+    // `a_symlink_at_the_old_predictable_temp_path_does_not_capture_the_write`
+    // below) rather than today's actual attack surface. Pin the structural
+    // property directly instead: `create(true)` silently follows (and, for
+    // an existing regular file, ignores the requested mode on) a
+    // pre-existing path, including a planted symlink — only `create_new`
+    // refuses outright.
+    assert!(
+        write_temp_file_src.contains(".create_new(true)"),
+        "write_temp_file must use create_new(true), not create(true) — create(true) would \
+         silently follow or overwrite a pre-existing path, including a planted symlink"
     );
     assert!(
-        !src.contains("set_permissions"),
-        "save() must not tighten permissions after writing — that TOCTOU window is exactly \
-         the phase-1 token-cache bug this task calls out"
+        !write_temp_file_src.contains("set_permissions"),
+        "write_temp_file must not tighten permissions after writing — that TOCTOU window is \
+         exactly the phase-1 token-cache bug this task calls out"
     );
 }
 
@@ -167,4 +194,53 @@ fn a_symlink_at_the_old_predictable_temp_path_does_not_capture_the_write() {
     assert_eq!(mode & 0o777, 0o600);
     let back = Secrets::load(&paths).unwrap();
     assert_eq!(back.get("A"), Some("value"));
+}
+
+/// Review finding 3: every save produces a NEVER-REUSED temp filename
+/// (nanoseconds + a counter), unlike the old pid-only scheme a later save
+/// from the same pid would eventually overwrite — so a leftover from a
+/// crash between the write and the rename (a hard crash or `SIGKILL`,
+/// which the error-path cleanup in `save` cannot run against) would
+/// otherwise sit there forever, holding a complete plaintext copy of the
+/// store. `save` sweeps stale `<file>.json.tmp.*` siblings at the start of
+/// every call, so the leftover is cleaned up on the very next save.
+#[test]
+fn a_stale_temp_file_from_a_previous_crash_is_swept_on_the_next_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    std::fs::create_dir_all(dir.path()).unwrap();
+    let stale = dir.path().join("secrets.json.tmp.99999.123456789.7");
+    std::fs::write(&stale, "leftover plaintext from a crashed save").unwrap();
+
+    let mut s = Secrets::empty();
+    s.set("A", "value".into());
+    s.save(&paths).unwrap();
+
+    assert!(
+        !stale.exists(),
+        "a stale temp file from a previous crash must be swept on the next save"
+    );
+    let back = Secrets::load(&paths).unwrap();
+    assert_eq!(back.get("A"), Some("value"));
+}
+
+/// The sweep must be scoped to THIS store's own temp files — never delete
+/// an unrelated file that merely happens to sit in the same directory.
+#[test]
+fn sweeping_stale_temp_files_does_not_touch_unrelated_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    std::fs::create_dir_all(dir.path()).unwrap();
+    let unrelated = dir.path().join("cache").join("tokens.json");
+    std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+    std::fs::write(&unrelated, "{}").unwrap();
+    let sibling_file = dir.path().join("secrets.json.bak"); // not a `.tmp.` name
+    std::fs::write(&sibling_file, "keep me").unwrap();
+
+    let mut s = Secrets::empty();
+    s.set("A", "value".into());
+    s.save(&paths).unwrap();
+
+    assert!(unrelated.exists());
+    assert!(sibling_file.exists());
 }

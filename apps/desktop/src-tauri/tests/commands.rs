@@ -291,6 +291,87 @@ async fn set_secret_rejects_an_empty_value() {
     assert_eq!(commands::reveal_secret_inner(&state, "A").unwrap(), "1");
 }
 
+/// Review finding 2: `secrets_error` is only refreshed by `AppState::new`
+/// and `reload()`, and the file watcher only watches `apis_dir()` — never
+/// `secrets.json`. So a file corrupted by an external editor AFTER the app
+/// last reloaded would previously read as `secrets_error == None`, and the
+/// next `set_secret` would build its clone from the (still-good)
+/// `state.secrets` and write straight over the corrupted file, destroying
+/// it. `set_secret_inner`/`delete_secret_inner` now load fresh from disk
+/// every time instead, which closes that window: the corruption is caught
+/// right here, and the on-disk file is left untouched by the refused write.
+#[tokio::test]
+async fn set_secret_refuses_to_overwrite_a_store_corrupted_after_the_last_reload() {
+    let (dir, state) = state_with_secrets(&[("A", "1")]);
+    // `state` already loaded successfully — `secrets_error` is None, and
+    // `state.secrets`/the executor both hold `{"A": "1"}` in memory. The
+    // file is then corrupted EXTERNALLY, exactly as an editor or another
+    // process might, without anything in this process reloading in between.
+    let paths = Paths::at(dir.path());
+    std::fs::write(paths.secrets_file(), "{ this is not json").unwrap();
+    let before = std::fs::read_to_string(paths.secrets_file()).unwrap();
+
+    let err = commands::set_secret_inner(&state, "B", "new-value")
+        .await
+        .unwrap_err();
+    assert!(!err.is_empty());
+
+    let after = std::fs::read_to_string(paths.secrets_file()).unwrap();
+    assert_eq!(
+        before, after,
+        "a refused write must leave the corrupted file exactly as it was, not overwrite it"
+    );
+}
+
+/// The mirror of the test above for delete — same window, same fix.
+#[tokio::test]
+async fn delete_secret_refuses_to_overwrite_a_store_corrupted_after_the_last_reload() {
+    let (dir, state) = state_with_secrets(&[("A", "1")]);
+    let paths = Paths::at(dir.path());
+    std::fs::write(paths.secrets_file(), "{ this is not json").unwrap();
+    let before = std::fs::read_to_string(paths.secrets_file()).unwrap();
+
+    let err = commands::delete_secret_inner(&state, "A")
+        .await
+        .unwrap_err();
+    assert!(!err.is_empty());
+
+    let after = std::fs::read_to_string(paths.secrets_file()).unwrap();
+    assert_eq!(
+        before, after,
+        "a refused delete must leave the corrupted file exactly as it was"
+    );
+}
+
+/// The fresh-load fix also means an external edit that ADDS or CHANGES a
+/// secret between reloads is picked up for free, not just corruption —
+/// proven here: a secret set through another "process" (a raw file write,
+/// standing in for an external editor) is preserved by a save that only
+/// touches a DIFFERENT name, rather than being clobbered by a save built
+/// from the stale in-memory `state.secrets`.
+#[tokio::test]
+async fn set_secret_preserves_an_external_edit_made_after_the_last_reload() {
+    let (dir, state) = state_with_secrets(&[("A", "1")]);
+    let paths = Paths::at(dir.path());
+    // An external process adds "C" without this AppState ever reloading.
+    std::fs::write(
+        paths.secrets_file(),
+        serde_json::json!({ "A": "1", "C": "external" }).to_string(),
+    )
+    .unwrap();
+
+    commands::set_secret_inner(&state, "B", "2").await.unwrap();
+
+    let reloaded = reqchain_core::secrets::Secrets::load(&paths).unwrap();
+    assert_eq!(reloaded.get("A"), Some("1"));
+    assert_eq!(reloaded.get("B"), Some("2"));
+    assert_eq!(
+        reloaded.get("C"),
+        Some("external"),
+        "an external edit made after the last reload must survive a later set_secret"
+    );
+}
+
 #[tokio::test]
 async fn delete_secret_reports_an_unknown_name_instead_of_succeeding_quietly() {
     let (_d, state) = state_with_secrets(&[("A", "1")]);
@@ -343,17 +424,26 @@ async fn set_secret_persists_to_disk_with_0600_permissions() {
 /// Review finding 1/2: on a FAILED save, `state.secrets` and the executor's
 /// own snapshot must not end up disagreeing. The store loads fine at
 /// startup (so this isn't `secrets_error`'s corrupt-file path); the save
-/// itself is then forced to fail by revoking write permission on the
-/// secrets directory (an EACCES stand-in for the ENOSPC/EROFS the review
-/// named — no adversary needed, just a full disk or a read-only mount).
-/// Both `state.secrets` (what `list_secrets`/`reveal_secret` read) and the
-/// executor's own snapshot (what a run actually sends) must still agree on
-/// the ORIGINAL value afterwards — proven by running for real against a
-/// mock that only accepts it.
+/// itself is then forced to fail.
+///
+/// The first version of this test forced the failure with a directory
+/// permission bit (chmod 0500) — which a process running as root (as many
+/// CI images do) simply ignores, silently turning the whole test into a
+/// no-op that `cargo test` still reports as `ok`. This version forces the
+/// failure STRUCTURALLY instead: a regular FILE is placed where a
+/// directory is expected on the path (`.../blocker/root/...`), so every
+/// filesystem call that needs to create or traverse an entry under it
+/// fails with `ENOTDIR` — a kernel-level invariant no uid, including root,
+/// can bypass. `Secrets::load` is asserted to fail too, as a sanity check
+/// that this really is unusable rather than silently succeeding.
+///
+/// `state.secrets` (what `list_secrets`/`reveal_secret` read) must still
+/// agree with the EXECUTOR's own snapshot (what a run actually sends)
+/// afterwards — proven by running for real against a mock that only
+/// accepts the original value.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failed_save_leaves_state_and_the_executor_agreeing_on_the_old_value() {
-    use std::os::unix::fs::PermissionsExt;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -366,8 +456,11 @@ async fn a_failed_save_leaves_state_and_the_executor_agreeing_on_the_old_value()
         .mount(&mock)
         .await;
 
+    // A separate, nested root inside the tempdir — so sabotaging THIS path
+    // below leaves the outer tempdir itself intact and normally cleanable.
     let dir = tempfile::tempdir().unwrap();
-    let paths = Paths::at(dir.path());
+    let root = dir.path().join("app-root");
+    let paths = Paths::at(&root);
     std::fs::create_dir_all(paths.apis_dir()).unwrap();
     let text = format!(
         r#"{{"schemaVersion":1,"id":"demo","name":"Demo","baseUrl":"{}",
@@ -386,38 +479,28 @@ async fn a_failed_save_leaves_state_and_the_executor_agreeing_on_the_old_value()
     // Loaded cleanly — this test is about a SAVE failure, not a corrupt file.
     assert!(state.secrets_error.lock().unwrap().is_none());
 
-    // Revoke write (and execute, so a new dirent truly cannot be created)
-    // permission on the root directory: `secrets_file()`'s parent already
-    // exists, so `create_dir_all` is a no-op, but the temp file's
-    // `create_new` inside it must now fail.
-    let root_perms = std::fs::metadata(dir.path()).unwrap().permissions();
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    // Sabotage the ROOT the state was already constructed against: replace
+    // it, after construction, with a regular file. `state.paths.root` still
+    // names the same path, but every future filesystem call under it —
+    // `secrets_file()` included — now fails with ENOTDIR, unconditionally.
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::write(&root, b"not a directory any more").unwrap();
 
-    // Directory permissions do nothing against a process running as root
-    // (as some sandboxes/CI do) — probe first and skip rather than produce
-    // a false failure in that environment.
-    let probe = dir.path().join("write-probe");
-    let permissions_enforced = std::fs::write(&probe, "x").is_err();
-    let _ = std::fs::remove_file(&probe);
-    if !permissions_enforced {
-        std::fs::set_permissions(dir.path(), root_perms).unwrap();
-        eprintln!(
-            "skipping a_failed_save_leaves_state_and_the_executor_agreeing_on_the_old_value: \
-             directory permissions are not enforced for this process (running as root?)"
-        );
-        return;
-    }
+    // Sanity: this really is unusable, regardless of uid — no permission
+    // bit involved, so no root-bypass possible.
+    assert!(
+        reqchain_core::secrets::Secrets::load(&state.paths).is_err(),
+        "the sabotaged root must be structurally unusable"
+    );
 
-    let result = commands::set_secret_inner(&state, "PASS", "new-value").await;
-
-    // Restore permissions immediately so the tempdir can still be cleaned up
-    // even if an assertion below panics.
-    std::fs::set_permissions(dir.path(), root_perms).unwrap();
-
-    let err = result.unwrap_err();
+    let err = commands::set_secret_inner(&state, "PASS", "new-value")
+        .await
+        .unwrap_err();
     assert!(!err.is_empty());
 
-    // `state.secrets` must not have been mutated ahead of the failed save.
+    // `state.secrets` must not have been mutated ahead of the failed save —
+    // it was never touched at all, since `set_secret_inner` now loads fresh
+    // from disk (and failed there) rather than cloning `state.secrets`.
     assert_eq!(
         commands::reveal_secret_inner(&state, "PASS").unwrap(),
         ORIGINAL,
@@ -425,7 +508,10 @@ async fn a_failed_save_leaves_state_and_the_executor_agreeing_on_the_old_value()
     );
 
     // And the EXECUTOR's own snapshot must still agree — proven by actually
-    // running against a mock that only accepts the original value.
+    // running against a mock that only accepts the original value. The run
+    // itself needs no filesystem access beyond history (best-effort, and
+    // the sabotaged root also breaks the history directory — this run must
+    // still SUCCEED at the HTTP level even though history logging fails).
     let run = commands::run_endpoint_inner(&state, "demo", "secure", None)
         .await
         .unwrap();

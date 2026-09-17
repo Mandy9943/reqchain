@@ -89,12 +89,21 @@ impl Secrets {
     ///
     /// On any failure the half-written temp file is removed before the
     /// error is returned, rather than left behind for the next save (or an
-    /// attacker) to find.
+    /// attacker) to find. That cleanup cannot run at all against a hard
+    /// crash or `SIGKILL` between the write and the rename, though — and
+    /// unlike the old pid-only naming scheme (which a later save from the
+    /// same pid would eventually overwrite), the current unpredictable name
+    /// is never reused, so such a leftover would otherwise sit there
+    /// forever holding a complete plaintext copy of the store (0600, so
+    /// this is clutter and blast radius, not disclosure, but still worth
+    /// not accumulating). So every `save` first sweeps any temp files a
+    /// previous crashed save left behind.
     pub fn save(&self, paths: &Paths) -> std::io::Result<()> {
         let path = paths.secrets_file();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        sweep_stale_temp_files(&path);
         let text = serde_json::to_string_pretty(&self.map)?;
         let tmp_path = unique_temp_path(&path);
 
@@ -107,6 +116,34 @@ impl Secrets {
             return Err(e);
         }
         Ok(())
+    }
+}
+
+/// Best-effort removal of any `<secrets file>.json.tmp.*` sibling left
+/// behind by a save that crashed between writing the temp file and renaming
+/// it into place. Errors are ignored — this is opportunistic cleanup, not a
+/// correctness requirement, and must never turn a save that could otherwise
+/// succeed into a failure just because an old leftover could not be removed
+/// (e.g. a permissions quirk on that one stale file).
+fn sweep_stale_temp_files(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return;
+    };
+    let prefix = format!("{stem}.json.tmp.");
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(&prefix))
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 

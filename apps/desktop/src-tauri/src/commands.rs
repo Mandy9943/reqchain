@@ -3,6 +3,7 @@ use crate::state::AppState;
 use reqchain_core::chain::Executor;
 use reqchain_core::history::{self, HistoryEntry};
 use reqchain_core::model::Api;
+use reqchain_core::secrets::Secrets;
 use reqchain_core::shell::to_shell_command;
 use reqchain_core::store::Workspace;
 use std::path::Path;
@@ -343,56 +344,48 @@ fn validate_secret_value(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Refuses to write when the last load of `secrets.json` found it present
-/// but unparseable: `Secrets::save` writes the WHOLE map, so proceeding
-/// would silently overwrite (destroy) whatever the corrupted file still
-/// held with just the one edit this call is making.
-fn require_secrets_parsed(state: &AppState) -> Result<(), String> {
-    if let Some(err) = state.secrets_error.lock().unwrap().clone() {
-        return Err(format!(
-            "{err} — fix or remove the file before editing secrets here"
-        ));
-    }
-    Ok(())
-}
-
 /// Sets (creates or replaces) a secret and reloads, so the `Executor`'s own
 /// `Secrets` snapshot (`AppState::reload`'s doc comment) picks it up
 /// immediately — a secret set through this command must be usable by the
 /// very next run, not just the next app restart.
 ///
-/// Mutates a CLONE of `state.secrets`, saves THAT, and only reloads
-/// (refreshing both `state.secrets` and the executor's snapshot together)
-/// once the save has actually succeeded. Mutating `state.secrets` in place
-/// before saving — the previous shape of this function — left the mask
-/// source (`state.secrets`) and the request source (the executor's own,
-/// separately-held snapshot) disagreeing on any save failure (a full disk,
-/// a read-only filesystem, a permissions error): `state.secrets` would hold
-/// the NEW value while the executor kept resolving requests against the
-/// OLD one, so the OLD credential would go out on the wire while nothing
-/// in `request_mask`/`response_mask` still knew to redact it.
+/// Builds the map to save from a FRESH `Secrets::load(&state.paths)`, not
+/// from `state.secrets`, for two reasons that are really the same bug at
+/// two different windows:
+///  - a save that fails partway through (a full disk, a read-only
+///    filesystem, a permissions error) must never leave `state.secrets`
+///    holding a value that was never actually persisted — mutating
+///    `state.secrets` in place before saving did exactly that, leaving the
+///    mask source and the (separately held) executor snapshot disagreeing;
+///  - `state.secrets` is only ever refreshed by `reload()`, and the file
+///    watcher does not watch `secrets.json` (only `apis_dir()`) — so an
+///    external edit (or corruption) landing between the last reload and
+///    this call would be invisible to a clone built from `state.secrets`,
+///    and this save would silently overwrite it with a stale-based copy.
+///
+/// Loading fresh from disk right before mutating closes both windows at
+/// once: whatever's actually on disk right now (good, bad, or edited by
+/// someone else) is what gets read, patched, and written back, and a
+/// corrupt file is refused here (via `Secrets::load`'s own `Err`) rather
+/// than silently destroyed by being overwritten with "empty plus one entry".
 pub async fn set_secret_inner(state: &AppState, name: &str, value: &str) -> Result<(), String> {
     validate_secret_name(name)?;
     validate_secret_value(value)?;
-    require_secrets_parsed(state)?;
-    let mut secrets = state.secrets.lock().unwrap().clone();
+    let mut secrets = Secrets::load(&state.paths)
+        .map_err(|e| format!("{e} — fix or remove the file before editing secrets here"))?;
     secrets.set(name, value.to_string());
     secrets.save(&state.paths).map_err(|e| e.to_string())?;
     state.reload().await;
     Ok(())
 }
 
-/// Deletes a secret and reloads, for the same staleness reason as
-/// `set_secret_inner` — and the same clone-then-save-then-reload ordering,
-/// for the same reason: a save failure here must never leave the value
-/// gone from `state.secrets` (and so from every mask) while it is still
-/// live in the executor's own snapshot, which would be the worse direction
-/// of the same bug — a credential un-redacted BECAUSE it was believed
-/// already deleted.
+/// Deletes a secret and reloads, for the same staleness reasons as
+/// `set_secret_inner` — and the same fresh-load-then-save-then-reload
+/// ordering, for the same reasons.
 pub async fn delete_secret_inner(state: &AppState, name: &str) -> Result<(), String> {
     validate_secret_name(name)?;
-    require_secrets_parsed(state)?;
-    let mut secrets = state.secrets.lock().unwrap().clone();
+    let mut secrets = Secrets::load(&state.paths)
+        .map_err(|e| format!("{e} — fix or remove the file before editing secrets here"))?;
     if !secrets.remove(name) {
         return Err(format!("secret `{name}` not found"));
     }
