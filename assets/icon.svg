@@ -19,9 +19,13 @@
   <rect width="128" height="128" rx="28" fill="url(#bg)"/>
 
   <!-- Two chain links: the second derives from the first, which is what the app
-       is about — one request taking its credential from another. -->
-  <g fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round">
-    <rect x="12" y="47" width="54" height="34" rx="17" mask="url(#crossing)"/>
-    <rect x="62" y="47" width="54" height="34" rx="17"/>
+       is about — one request taking its credential from another. Set on a
+       diagonal (rather than side by side) so the pair reads as a chain link
+       and not as two letters. -->
+  <g transform="rotate(-40 64 64)">
+    <g fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round">
+      <rect x="12" y="47" width="54" height="34" rx="17" mask="url(#crossing)"/>
+      <rect x="62" y="47" width="54" height="34" rx="17"/>
+    </g>
   </g>
 </svg>
