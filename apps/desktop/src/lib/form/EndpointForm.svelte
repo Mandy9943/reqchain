@@ -204,30 +204,34 @@
 
 <style>
   .placeholder {
+    padding: var(--space-5);
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
-    font-style: italic;
   }
 
+  /* One gutter for the whole centre column, set here rather than on every
+     row, and the same one the URL bar above uses — so a label, a field and
+     the method chip overhead all line up on the same left edge. */
   .endpoint-form {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 0.9rem;
+    gap: var(--space-6);
     overflow-y: auto;
     min-height: 0;
-    padding: 0.25rem 0;
+    padding: var(--space-5);
   }
 
   .field-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-4);
   }
 
   .field-row label {
     flex-shrink: 0;
-    width: 4rem;
-    font-size: 0.8rem;
+    width: var(--label-col);
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
 
@@ -235,24 +239,52 @@
   .path-input {
     flex: 1;
     min-width: 0;
-    padding: 0.3rem 0.4rem;
-    font-size: 0.85rem;
+    height: var(--control-height);
+    padding: 0 var(--space-4);
+    font-size: var(--text-base);
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-field);
     color: var(--color-text);
   }
 
-  .path-input {
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  .method-select:focus,
+  .path-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
   }
 
+  .path-input {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+
+  .fields-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  /* The section name and its hairline read as one object: the rule runs to
+     the right edge of the column, so the eye can tell where one group of
+     fields ends and the next begins without counting gaps. */
   .fields-section h3 {
-    margin: 0 0 0.4rem;
-    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin: 0;
+    font-family: var(--font-condensed);
+    font-weight: 600;
+    font-size: 0.625rem;
+    letter-spacing: 0.13em;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--color-text-muted);
+    color: var(--color-text-faint);
+  }
+
+  .fields-section h3::after {
+    content: "";
+    flex-grow: 1;
+    height: 1px;
+    background: var(--color-border-soft);
   }
 </style>

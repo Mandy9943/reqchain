@@ -3,11 +3,24 @@
   import { emptyApi, emptyEndpoint, serializeApi, slugify } from "./model";
   import { currentDoc, updateDoc } from "./doc.svelte";
   import { canWriteApiDoc, reload, select, ui } from "./state.svelte";
+  import Icon from "./ui/Icon.svelte";
+  import MethodChip from "./ui/MethodChip.svelte";
 
-  interface Props {
-    onOpenSecrets: () => void;
+  // Which API groups the user has folded shut. Keyed by api id and stored
+  // here rather than in `ui`, because it is pure view state: it must not
+  // survive a workspace reload into a file that no longer exists, and
+  // nothing outside this list cares about it.
+  let collapsedApis = $state<Record<string, boolean>>({});
+
+  /** A searching user wants hits, not folds: a live query opens every group. */
+  function isCollapsed(api: ApiDto): boolean {
+    if (ui.search.trim()) return false;
+    return !!collapsedApis[api.id];
   }
-  let { onOpenSecrets }: Props = $props();
+
+  function toggleCollapsed(api: ApiDto): void {
+    collapsedApis[api.id] = !collapsedApis[api.id];
+  }
 
   function matches(ep: EndpointDto, query: string): boolean {
     if (!query) return true;
@@ -266,6 +279,11 @@
       delete ui.buffers[api.id];
       delete ui.env[api.id];
       delete ui.diskChanged[api.id];
+      // Same reason as the three above: ids are slugified from the name, so
+      // recreating an API called the same thing lands on the same key, and a
+      // leftover `true` here would open the new API folded shut for no
+      // reason the user can see.
+      delete collapsedApis[api.id];
       await reload();
       confirmingDeleteApi = null;
     } catch (e) {
@@ -347,16 +365,68 @@
   }
 </script>
 
+
 <aside class="sidebar">
-  <input
-    class="search"
-    type="search"
-    placeholder="Search endpoints..."
-    aria-label="Search endpoints"
-    bind:value={ui.search}
-  />
+  <div class="search-row">
+    <span class="search-icon"><Icon name="search" size={13} /></span>
+    <input
+      class="search"
+      type="search"
+      placeholder="Search endpoints"
+      aria-label="Search endpoints"
+      bind:value={ui.search}
+    />
+    <kbd class="keycap">Ctrl K</kbd>
+  </div>
 
   <div class="apis">
+    <div class="section-head">
+      <span class="section-label">Workspace</span>
+      <button
+        type="button"
+        class="icon-button"
+        onclick={startCreateApi}
+        aria-label="New API"
+        title="New API"
+      >
+        <Icon name="plus" size={12} />
+      </button>
+    </div>
+
+    {#if creatingApi}
+      <div class="new-row">
+        <input
+          type="text"
+          class="new-input"
+          placeholder="API name"
+          aria-label="New API name"
+          bind:value={newApiName}
+          onkeydown={onNewApiKeydown}
+          disabled={newApiBusy}
+          use:autofocus
+        />
+        <button
+          type="button"
+          class="confirm-button"
+          disabled={newApiBusy}
+          onclick={submitCreateApi}
+        >
+          {newApiBusy ? "Creating…" : "Create"}
+        </button>
+        <button
+          type="button"
+          class="cancel-button"
+          disabled={newApiBusy}
+          onclick={cancelCreateApi}
+        >
+          Cancel
+        </button>
+      </div>
+      {#if newApiError}
+        <p class="inline-error">{newApiError}</p>
+      {/if}
+    {/if}
+
     <!-- Keyed by INDEX, not by id. Nothing guarantees these ids are unique:
          `Workspace::load` drops a duplicate API id, but it does not lint
          ENDPOINT ids, so a file declaring the same endpoint id twice loads
@@ -368,15 +438,30 @@
          reorder, which is invisible for a list this size. -->
     {#each ui.workspace.apis as api, apiIndex (apiIndex)}
       <section class="api">
-        <div class="api-header-row">
+        <div class="api-header-row" class:selected={isApiSelected(api)}>
+          <button
+            type="button"
+            class="disclosure"
+            onclick={() => toggleCollapsed(api)}
+            aria-expanded={!isCollapsed(api)}
+            aria-label={`${isCollapsed(api) ? "Expand" : "Collapse"} ${api.name}`}
+          >
+            <Icon name={isCollapsed(api) ? "chevron-right" : "chevron-down"} size={12} />
+          </button>
+
           <button
             type="button"
             class="api-header"
-            class:selected={isApiSelected(api)}
             onclick={() => selectApi(api)}
+            title={api.path}
           >
             <span class="api-name">{api.name}</span>
           </button>
+
+          {#if isDirty(api)}
+            <span class="dirty-dot" title="Unsaved changes"></span>
+          {/if}
+
           {#if api.environments.length > 0}
             <select
               class="env-select"
@@ -388,31 +473,35 @@
               {/each}
             </select>
           {/if}
-        </div>
 
-        <div class="api-actions">
-          <button
-            type="button"
-            class="link-button"
-            disabled={!canWriteApiDoc(api.id)}
-            title={canWriteApiDoc(api.id)
-              ? undefined
-              : "A save or delete is in progress for this API"}
-            onclick={() => startCreateEndpoint(api)}
-          >
-            + New endpoint
-          </button>
-          <button
-            type="button"
-            class="link-button link-button-danger"
-            disabled={!canDeleteApi(api)}
-            title={canDeleteApi(api)
-              ? undefined
-              : "A save is in progress for this API"}
-            onclick={() => startDeleteApi(api)}
-          >
-            Delete
-          </button>
+          <span class="row-actions">
+            <button
+              type="button"
+              class="icon-button"
+              disabled={!canWriteApiDoc(api.id)}
+              title={canWriteApiDoc(api.id)
+                ? "New endpoint"
+                : "A save or delete is in progress for this API"}
+              aria-label={`New endpoint in ${api.name}`}
+              onclick={() => startCreateEndpoint(api)}
+            >
+              <Icon name="plus" size={12} />
+            </button>
+            <button
+              type="button"
+              class="icon-button icon-button-danger"
+              disabled={!canDeleteApi(api)}
+              title={canDeleteApi(api)
+                ? "Delete this API's file"
+                : "A save is in progress for this API"}
+              aria-label={`Delete ${api.name}`}
+              onclick={() => startDeleteApi(api)}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </span>
+
+          <span class="count">{api.endpoints.length}</span>
         </div>
 
         {#if confirmingDeleteApi === api.id}
@@ -452,7 +541,7 @@
         {/if}
 
         {#if creatingEndpointFor === api.id}
-          <div class="new-row">
+          <div class="new-row new-row-nested">
             <input
               type="text"
               class="new-input"
@@ -485,141 +574,120 @@
           {/if}
         {/if}
 
-        <ul class="endpoints">
-          {#each visibleEndpoints(api) as endpoint, endpointIndex (endpointIndex)}
-            <li>
-              <div class="endpoint-row">
-                <button
-                  type="button"
-                  class="endpoint"
+        {#if !isCollapsed(api)}
+          <ul class="endpoints">
+            {#each visibleEndpoints(api) as endpoint, endpointIndex (endpointIndex)}
+              <li>
+                <div
+                  class="endpoint-row"
                   class:selected={isEndpointSelected(api, endpoint)}
-                  onclick={() => selectEndpoint(api, endpoint)}
                 >
-                  <span class="method method-{endpoint.method.toLowerCase()}"
-                    >{endpoint.method}</span
+                  <button
+                    type="button"
+                    class="endpoint"
+                    onclick={() => selectEndpoint(api, endpoint)}
+                    title={endpoint.path}
                   >
-                  <span class="endpoint-name">{endpoint.name}</span>
-                  {#if endpoint.authKind === "chained"}
-                    <span class="chain-marker" title="Chained auth">chain</span
-                    >
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class="link-button link-button-danger endpoint-delete"
-                  disabled={!canWriteApiDoc(api.id)}
-                  title={canWriteApiDoc(api.id)
-                    ? undefined
-                    : "A save or delete is in progress for this API"}
-                  onclick={() => startDeleteEndpoint(api, endpoint)}
-                  aria-label={`Delete ${endpoint.name}`}
-                >
-                  ×
-                </button>
-              </div>
+                    <MethodChip method={endpoint.method} />
+                    <span class="endpoint-name">{endpoint.name}</span>
+                    <span class="endpoint-path">{endpoint.path}</span>
+                  </button>
 
-              {#if confirmingDeleteEndpoint === endpointKey(api, endpoint)}
-                <div class="confirm-row confirm-row-danger">
-                  <p class="confirm-text">
-                    Remove endpoint <strong>{endpoint.name}</strong> from
-                    <code>{api.name}</code>?
-                  </p>
-                  {#if deleteEndpointError}
-                    <p class="inline-error">{deleteEndpointError}</p>
+                  {#if endpoint.authKind === "chained"}
+                    <span class="chain-marker" title="Chained auth">
+                      <Icon name="chain" size={11} />
+                    </span>
                   {/if}
-                  <div class="confirm-buttons">
+
+                  <span class="row-actions">
                     <button
                       type="button"
-                      class="danger-button"
-                      disabled={deleteEndpointBusy}
-                      onclick={() => confirmDeleteEndpoint(api, endpoint)}
+                      class="icon-button icon-button-danger"
+                      disabled={!canWriteApiDoc(api.id)}
+                      title={canWriteApiDoc(api.id)
+                        ? "Remove this endpoint"
+                        : "A save or delete is in progress for this API"}
+                      onclick={() => startDeleteEndpoint(api, endpoint)}
+                      aria-label={`Delete ${endpoint.name}`}
                     >
-                      {deleteEndpointBusy ? "Removing…" : "Remove"}
+                      <Icon name="close" size={12} />
                     </button>
-                    <button
-                      type="button"
-                      class="cancel-button"
-                      disabled={deleteEndpointBusy}
-                      onclick={cancelDeleteEndpoint}
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                  </span>
                 </div>
-              {/if}
-            </li>
-          {/each}
-        </ul>
+
+                {#if confirmingDeleteEndpoint === endpointKey(api, endpoint)}
+                  <div class="confirm-row confirm-row-danger">
+                    <p class="confirm-text">
+                      Remove endpoint <strong>{endpoint.name}</strong> from
+                      <code>{api.name}</code>?
+                    </p>
+                    {#if deleteEndpointError}
+                      <p class="inline-error">{deleteEndpointError}</p>
+                    {/if}
+                    <div class="confirm-buttons">
+                      <button
+                        type="button"
+                        class="danger-button"
+                        disabled={deleteEndpointBusy}
+                        onclick={() => confirmDeleteEndpoint(api, endpoint)}
+                      >
+                        {deleteEndpointBusy ? "Removing…" : "Remove"}
+                      </button>
+                      <button
+                        type="button"
+                        class="cancel-button"
+                        disabled={deleteEndpointBusy}
+                        onclick={cancelDeleteEndpoint}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+              </li>
+            {/each}
+
+            {#if visibleEndpoints(api).length === 0}
+              <li class="no-match">
+                {ui.search.trim()
+                  ? "No endpoint here matches the search."
+                  : "No endpoints yet."}
+              </li>
+            {/if}
+          </ul>
+        {/if}
       </section>
     {/each}
 
-    {#if ui.workspace.apis.length === 0}
+    {#if ui.workspace.apis.length === 0 && !creatingApi}
       <!-- A fresh install has no workspace files, and a bare empty panel
            gives no clue where they are meant to go. -->
-      <p class="empty-state">
-        No APIs yet. Create one below, or drop a JSON file into
-        <code>~/.config/reqchain/workspace/apis/</code> — the app picks it up
-        as soon as it is saved. <code>SPEC.md</code> describes the format, and
-        <code>reqchain validate &lt;file&gt;</code> checks one.
-      </p>
+      <div class="empty-state">
+        <span class="empty-glyph"><Icon name="chain" size={22} /></span>
+        <p>
+          No APIs yet. Create one with <strong>+</strong> above, or drop a JSON
+          file into <code>~/.config/reqchain/workspace/apis/</code> — the app
+          picks it up as soon as it is saved.
+        </p>
+        <p class="empty-hint">
+          <code>SPEC.md</code> describes the format, and
+          <code>reqchain validate &lt;file&gt;</code> checks one.
+        </p>
+      </div>
     {/if}
-
-    <div class="new-api">
-      {#if creatingApi}
-        <div class="new-row">
-          <input
-            type="text"
-            class="new-input"
-            placeholder="API name"
-            aria-label="New API name"
-            bind:value={newApiName}
-            onkeydown={onNewApiKeydown}
-            disabled={newApiBusy}
-            use:autofocus
-          />
-          <button
-            type="button"
-            class="confirm-button"
-            disabled={newApiBusy}
-            onclick={submitCreateApi}
-          >
-            {newApiBusy ? "Creating…" : "Create"}
-          </button>
-          <button
-            type="button"
-            class="cancel-button"
-            disabled={newApiBusy}
-            onclick={cancelCreateApi}
-          >
-            Cancel
-          </button>
-        </div>
-        {#if newApiError}
-          <p class="inline-error">{newApiError}</p>
-        {/if}
-      {:else}
-        <button type="button" class="new-api-button" onclick={startCreateApi}>
-          + New API
-        </button>
-      {/if}
-    </div>
   </div>
 
   {#if ui.workspace.errors.length > 0}
     <div class="errors">
       {#each ui.workspace.errors as err, errIndex (errIndex)}
         <div class="error-row">
-          {err.path.split("/").pop()} — {err.message}
+          <Icon name="warning" size={12} />
+          <span class="error-file">{err.path.split("/").pop()}</span>
+          <span class="error-message">{err.message}</span>
         </div>
       {/each}
     </div>
   {/if}
-
-  <div class="sidebar-footer">
-    <button type="button" class="secrets-button" onclick={onOpenSecrets}>
-      Secrets
-    </button>
-  </div>
 </aside>
 
 <style>
@@ -627,290 +695,440 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
     overflow: hidden;
     border-right: 1px solid var(--color-border);
     background: var(--color-surface);
   }
 
-  .search {
-    margin: 0.5rem;
-    padding: 0.4rem 0.6rem;
-    font-size: 0.9rem;
+  /* --- Search ----------------------------------------------------------- */
+
+  .search-row {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-4);
+    padding: 0 var(--space-3);
+    height: var(--control-height);
+    background: var(--color-inset);
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
-    color: var(--color-text);
+    border-radius: var(--radius-md);
   }
 
+  .search-row:focus-within {
+    border-color: var(--color-accent-line);
+  }
+
+  .search-icon {
+    display: flex;
+    color: var(--color-text-faint);
+  }
+
+  .search {
+    flex-grow: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    font-size: var(--text-base);
+  }
+
+  .search:focus {
+    outline: none;
+  }
+
+  .search::-webkit-search-cancel-button {
+    filter: grayscale(1);
+    opacity: 0.6;
+  }
+
+  .keycap {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--color-text-faint);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 4px;
+  }
+
+  /* --- The list --------------------------------------------------------- */
+
   .apis {
-    flex: 1;
-    overflow-y: auto;
+    flex-grow: 1;
     min-height: 0;
+    overflow-y: auto;
+    padding: 0 var(--space-3) var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-1) var(--space-2) var(--space-2);
+  }
+
+  .section-label {
+    font-family: var(--font-condensed);
+    font-weight: 600;
+    font-size: 0.625rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--color-text-faint);
   }
 
   .api {
-    margin-bottom: 0.5rem;
+    display: flex;
+    flex-direction: column;
   }
 
   .api-header-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0 0.6rem;
+    gap: var(--space-2);
+    height: var(--row-height);
+    padding-right: var(--space-2);
+    border-radius: var(--radius-md);
   }
 
-  .api-header {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    padding: 0.35rem 0.4rem;
-    font-weight: 600;
-    font-size: 0.85rem;
-    color: var(--color-text-muted);
-    border: none;
-    background: transparent;
-    text-align: left;
-    cursor: pointer;
-    border-radius: 3px;
-  }
-
-  .api-header:hover {
+  .api-header-row:hover {
     background: var(--color-hover);
   }
 
-  .api-header.selected {
-    background: var(--color-selected);
+  .api-header-row.selected {
+    background: var(--color-accent-tint);
   }
 
-  .api-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .api-actions {
+  .disclosure {
     display: flex;
-    gap: 0.6rem;
-    padding: 0 0.6rem 0.25rem;
-  }
-
-  .link-button {
-    padding: 0;
-    font-size: 0.75rem;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
     border: none;
     background: none;
-    color: var(--color-accent);
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
-  .link-button-danger {
-    color: var(--color-error-text);
+  .api-header {
+    flex-grow: 1;
+    min-width: 0;
+    text-align: left;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .api-name {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .dirty-dot {
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-accent);
+  }
+
+  .env-select {
+    flex-shrink: 0;
+    max-width: 6.5rem;
+    height: 1.375rem;
+    padding: 0 var(--space-1);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+  }
+
+  .count {
+    flex-shrink: 0;
+    min-width: 1rem;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--color-text-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Row actions are progressive disclosure: they appear on hover or when
+     something inside them has keyboard focus, so a 40-endpoint workspace
+     isn't a wall of always-on buttons. */
+  .row-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+  }
+
+  .api-header-row:hover .row-actions,
+  .api-header-row:focus-within .row-actions,
+  .endpoint-row:hover .row-actions,
+  .endpoint-row:focus-within .row-actions {
+    opacity: 1;
+  }
+
+  .icon-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  .icon-button:hover:not(:disabled) {
+    background: var(--color-border);
+    color: var(--color-text-strong);
+  }
+
+  .icon-button:disabled {
+    color: var(--color-text-faint);
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .icon-button-danger:hover:not(:disabled) {
+    background: var(--color-err-tint);
+    color: var(--color-err);
+  }
+
+  /* --- Endpoints -------------------------------------------------------- */
+
+  .endpoints {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 var(--space-2) var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
   }
 
   .endpoint-row {
     display: flex;
     align-items: center;
-    gap: 0.2rem;
+    gap: var(--space-2);
+    height: var(--row-height);
+    padding-right: var(--space-2);
+    border-radius: var(--radius-md);
+    border-left: 2px solid transparent;
   }
 
-  .endpoint-delete {
-    flex-shrink: 0;
-    padding: 0 0.4rem;
-    font-size: 0.9rem;
-    line-height: 1;
+  .endpoint-row:hover {
+    background: var(--color-hover);
   }
+
+  .endpoint-row.selected {
+    background: var(--color-accent-tint);
+    border-left-color: var(--color-accent);
+  }
+
+  .endpoint {
+    flex-grow: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0 0 0 var(--space-2);
+    border: none;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .endpoint-name {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-base);
+    color: var(--color-text-soft);
+  }
+
+  .selected .endpoint-name {
+    color: var(--color-text-strong);
+    font-weight: 500;
+  }
+
+  /* The path is context for the name, not a second label: it gives up its
+     space first and disappears rather than pushing the name out. */
+  .endpoint-path {
+    flex-shrink: 1000000;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--color-text-faint);
+  }
+
+  .chain-marker {
+    flex-shrink: 0;
+    display: flex;
+    color: var(--color-text-muted);
+  }
+
+  .no-match {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-xs);
+    color: var(--color-text-faint);
+  }
+
+  /* --- Inline create rows ----------------------------------------------- */
 
   .new-row {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.25rem 0.6rem;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-2) var(--space-2) 0;
+  }
+
+  .new-row-nested {
+    padding-left: var(--space-5);
   }
 
   .new-input {
-    flex: 1;
+    flex-grow: 1;
     min-width: 0;
-    padding: 0.25rem 0.4rem;
-    font-size: 0.8rem;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
-    color: var(--color-text);
+    height: var(--control-height);
+    padding: 0 var(--space-3);
+    font-size: var(--text-base);
+    background-color: var(--color-field);
+    border: 1px solid var(--color-accent-line);
+    border-radius: var(--radius-md);
+  }
+
+  .new-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
   }
 
   .confirm-button,
   .cancel-button,
   .danger-button {
     flex-shrink: 0;
-    padding: 0.2rem 0.5rem;
-    font-size: 0.75rem;
-    border-radius: 4px;
+    height: 1.75rem;
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-inset);
+    color: var(--color-text);
     cursor: pointer;
   }
 
   .confirm-button {
-    border: 1px solid var(--color-accent);
+    border-color: var(--color-accent);
     background: var(--color-accent);
-    color: #fff;
-  }
-
-  .cancel-button {
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-text);
+    color: var(--color-accent-on);
+    font-weight: 600;
   }
 
   .danger-button {
-    border: 1px solid var(--color-error-text);
-    background: var(--color-error-bg);
-    color: var(--color-error-text);
+    border-color: var(--color-err);
+    background: var(--color-err);
+    color: var(--color-accent-on);
+    font-weight: 600;
   }
 
+  .confirm-button:disabled,
+  .cancel-button:disabled,
+  .danger-button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  /* --- Confirmations, errors -------------------------------------------- */
+
   .confirm-row {
-    margin: 0.15rem 0.6rem 0.4rem;
-    padding: 0.4rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.78rem;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin: var(--space-2) 0 var(--space-3);
+    padding: var(--space-4);
+    border-radius: var(--radius-lg);
+    font-size: var(--text-sm);
   }
 
   .confirm-row-danger {
-    background: var(--color-error-bg);
-    border: 1px solid var(--color-error-text);
-    color: var(--color-error-text);
+    border: 1px solid var(--color-err-line);
+    background: var(--color-err-tint);
   }
 
   .confirm-text {
-    margin: 0 0 0.35rem;
+    margin: 0;
+    line-height: 1.55;
+    color: var(--color-text);
   }
 
   .confirm-text code {
-    word-break: break-all;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--color-err);
   }
 
   .confirm-buttons {
     display: flex;
-    gap: 0.4rem;
+    gap: var(--space-2);
   }
 
   .inline-error {
-    margin: 0 0.6rem 0.4rem;
-    font-size: 0.75rem;
-    color: var(--color-error-text);
-  }
-
-  .new-api {
-    padding: 0.4rem 0.6rem;
-  }
-
-  .new-api-button {
-    width: 100%;
-    padding: 0.35rem 0.6rem;
-    font-size: 0.8rem;
-    border: 1px dashed var(--color-border);
-    border-radius: 4px;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-
-  .new-api-button:hover {
-    background: var(--color-hover);
-  }
-
-  .env-select {
-    font-size: 0.75rem;
-    max-width: 8rem;
-    background: var(--color-bg);
-    color: var(--color-text);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-  }
-
-  .endpoints {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .endpoint {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    width: 100%;
-    padding: 0.3rem 0.6rem;
-    border: none;
-    background: transparent;
-    color: var(--color-text);
-    font-size: 0.85rem;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .endpoint:hover {
-    background: var(--color-hover);
-  }
-
-  .endpoint.selected {
-    background: var(--color-selected);
-  }
-
-  .method {
-    flex-shrink: 0;
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 0.1rem 0.3rem;
-    border-radius: 3px;
-    background: var(--color-border);
-    color: var(--color-text);
-    min-width: 2.8rem;
-    text-align: center;
-  }
-
-  .method-get {
-    background: var(--color-method-get);
-  }
-  .method-post {
-    background: var(--color-method-post);
-  }
-  .method-put {
-    background: var(--color-method-put);
-  }
-  .method-patch {
-    background: var(--color-method-patch);
-  }
-  .method-delete {
-    background: var(--color-method-delete);
-  }
-
-  .endpoint-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-  }
-
-  .chain-marker {
-    flex-shrink: 0;
-    font-size: 0.65rem;
-    color: var(--color-text-muted);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    padding: 0.05rem 0.25rem;
+    margin: 0 0 var(--space-2);
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--color-err);
   }
 
   .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-6) var(--space-2);
+    padding: var(--space-6) var(--space-4);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-lg);
+    text-align: center;
+  }
+
+  .empty-glyph {
+    color: var(--color-border);
+  }
+
+  .empty-state p {
     margin: 0;
-    padding: 1rem 0.75rem;
-    font-size: 0.82rem;
-    line-height: 1.5;
+    font-size: var(--text-sm);
+    line-height: 1.6;
     color: var(--color-text-muted);
   }
 
+  .empty-hint {
+    color: var(--color-text-faint);
+  }
+
   .empty-state code {
-    font-size: 0.78rem;
-    word-break: break-all;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
   }
 
   .errors {
@@ -918,34 +1136,31 @@
     max-height: 30%;
     overflow-y: auto;
     border-top: 1px solid var(--color-border);
-    background: var(--color-error-bg);
-    color: var(--color-error-text);
-    font-size: 0.75rem;
+    background: var(--color-err-tint);
   }
 
   .error-row {
-    padding: 0.3rem 0.6rem;
-    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    color: var(--color-err);
+    border-bottom: 1px solid var(--color-err-line);
   }
 
-  .sidebar-footer {
+  .error-row:last-child {
+    border-bottom: none;
+  }
+
+  .error-file {
+    font-family: var(--font-mono);
     flex-shrink: 0;
-    padding: 0.5rem 0.6rem;
-    border-top: 1px solid var(--color-border);
   }
 
-  .secrets-button {
-    width: 100%;
-    padding: 0.35rem 0.6rem;
-    font-size: 0.8rem;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-surface);
-    color: var(--color-text);
-    cursor: pointer;
-  }
-
-  .secrets-button:hover {
-    background: var(--color-hover);
+  .error-message {
+    color: var(--color-text-muted);
+    min-width: 0;
   }
 </style>

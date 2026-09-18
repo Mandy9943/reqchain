@@ -1,14 +1,18 @@
 <script lang="ts">
   import { lint, previewEndpoint, saveApi, type DiagnosticDto } from "./ipc";
   import {
+    canSendSelected,
     canWriteApiDoc,
     discardLocalChanges,
     selectedApi,
     selectedApiOrRemoved,
     selectedEndpoint,
     selectedEndpointOrRemoved,
+    sendSelected,
     ui,
   } from "./state.svelte";
+  import Icon from "./ui/Icon.svelte";
+  import MethodChip from "./ui/MethodChip.svelte";
   import Editor from "./Editor.svelte";
   import ApiForm from "./form/ApiForm.svelte";
   import EndpointForm from "./form/EndpointForm.svelte";
@@ -278,6 +282,16 @@
     return true;
   }
 
+  /**
+   * Sends the selected endpoint. The control lives here, on the request's
+   * own URL bar, rather than above the response: the thing that fires a
+   * request belongs next to the request it fires, and `sendSelected` already
+   * owns the in-flight flag and run-sequence guard in state.svelte.ts.
+   */
+  function handleSend(): void {
+    void sendSelected();
+  }
+
   function handleDiscard(): void {
     if (liveApi) {
       discardLocalChanges(liveApi.id);
@@ -286,31 +300,105 @@
 </script>
 
 <div class="request-panel-inner">
-  {#if !api}
-    <p class="placeholder">Select an endpoint</p>
-  {:else if isApiOnlySelected}
-    <header class="summary">
-      <div class="summary-row">
+  {#if !api || (!isApiOnlySelected && !endpoint)}
+    <div class="placeholder-pane">
+      <span class="placeholder-glyph"><Icon name="chain" size={24} /></span>
+      <p>
+        Pick an endpoint on the left, or press <kbd class="keycap">Ctrl K</kbd>
+        to search the workspace.
+      </p>
+    </div>
+  {:else}
+    {#if isRemoved}
+      <div class="banner banner-error">
+        <Icon name="warning" size={13} />
+        <span>
+          This endpoint no longer exists in the workspace files — showing the
+          last known content{#if !liveApi} (the API file itself is gone){/if}.
+        </span>
+      </div>
+    {/if}
+
+    {#if isApiOnlySelected}
+      <header class="bar">
         <span class="api-settings-title">{api.name}</span>
-        {#if diskChanged}
-          <span class="badge badge-disk-changed">changed on disk</span>
-          <button type="button" class="discard-button" onclick={handleDiscard}>
-            Discard mine
-          </button>
-        {/if}
+        <span class="file-path">{api.path}</span>
+      </header>
+    {:else if endpoint}
+      <header class="bar">
+        <MethodChip method={endpoint.method} size="md" />
+
+        <div class="url-box" class:url-box-problem={isRemoved || !!previewError}>
+          {#if isRemoved}
+            <span class="url-note">endpoint removed</span>
+          {:else if previewUrl}
+            <span class="url">{previewUrl}</span>
+          {:else if previewError}
+            <span class="url-note">{previewError}</span>
+          {:else}
+            <span class="url-note">resolving…</span>
+          {/if}
+        </div>
+
         <button
           type="button"
-          class="save-button"
-          disabled={!liveApi || !dirty || saving}
-          onclick={handleSave}
+          class="send-button"
+          disabled={!canSendSelected()}
+          onclick={handleSend}
+          title="Send this request (Ctrl+Enter)"
         >
-          {saving ? "Saving…" : "Save"}
+          <Icon name="send" size={12} />
+          {ui.running ? "Sending…" : "Send"}
         </button>
-      </div>
-      {#if saveError}
-        <div class="save-error">{saveError}</div>
+      </header>
+    {/if}
+
+    <div class="meta-row">
+      {#if !isApiOnlySelected && endpoint}
+        <span class="auth-chip" class:auth-chip-chained={endpoint.authKind === "chained"}>
+          {#if endpoint.authKind === "chained"}
+            <Icon name="chain" size={11} />
+          {/if}
+          auth: {endpoint.authKind}
+        </span>
       {/if}
-    </header>
+
+      <span class="spacer"></span>
+
+      {#if diskChanged}
+        <span class="badge badge-warn">
+          <Icon name="warning" size={11} />
+          changed on disk
+        </span>
+        <button type="button" class="ghost-button" onclick={handleDiscard}>
+          Discard mine
+        </button>
+      {/if}
+
+      {#if dirty}
+        <span class="dirty-flag">
+          <span class="dirty-dot"></span>
+          Unsaved
+        </span>
+      {/if}
+
+      <button
+        type="button"
+        class="save-button"
+        disabled={!liveApi || !dirty || saving}
+        onclick={handleSave}
+      >
+        {saving ? "Saving…" : "Save"}
+        <kbd class="keycap keycap-quiet">Ctrl S</kbd>
+      </button>
+    </div>
+
+    {#if saveError}
+      <div class="banner banner-error">
+        <Icon name="warning" size={13} />
+        <span>{saveError}</span>
+      </div>
+    {/if}
 
     <div class="tab-strip" role="tablist">
       <button
@@ -333,6 +421,8 @@
       >
         JSON
       </button>
+      <span class="spacer"></span>
+      <span class="file-name">{api.path.split("/").pop()}</span>
     </div>
 
     <div class="tab-content">
@@ -347,128 +437,18 @@
             {#if parsedDoc}
               <button
                 type="button"
-                class="switch-to-json"
+                class="ghost-button"
                 onclick={() => (activeTab = "json")}
               >
                 Switch to JSON
               </button>
             {/if}
           </div>
-        {:else}
+        {:else if isApiOnlySelected}
           {#key parsedDoc.api.id}
             <ApiForm api={parsedDoc.api} />
           {/key}
-        {/if}
-      {:else}
-        <div class="editor-wrap">
-          <Editor
-            value={bufferText ?? api.text}
-            onChange={onEditorChange}
-            {diagnostics}
-          />
-        </div>
-      {/if}
-    </div>
-
-    {#if diagnostics.length > 0}
-      <div class="diagnostics">
-        {#each diagnostics as d, i (i)}
-          <div class="diagnostic diagnostic-{d.severity}">
-            {d.path} — {d.message}
-          </div>
-        {/each}
-      </div>
-    {/if}
-  {:else if !endpoint}
-    <p class="placeholder">Select an endpoint</p>
-  {:else}
-    {#if isRemoved}
-      <div class="removed-banner">
-        This endpoint no longer exists in the workspace files — showing the
-        last known content{#if !liveApi} (the API file itself is gone){/if}.
-      </div>
-    {/if}
-
-    <header class="summary">
-      <div class="summary-row">
-        <span class="method method-{endpoint.method.toLowerCase()}"
-          >{endpoint.method}</span
-        >
-        {#if isRemoved}
-          <span class="url url-error">endpoint removed</span>
-        {:else if previewUrl}
-          <span class="url">{previewUrl}</span>
-        {:else if previewError}
-          <span class="url url-error">{previewError}</span>
-        {:else}
-          <span class="url url-pending">resolving…</span>
-        {/if}
-      </div>
-      <div class="summary-row">
-        <span class="auth-kind">auth: {endpoint.authKind}</span>
-        {#if diskChanged}
-          <span class="badge badge-disk-changed">changed on disk</span>
-          <button type="button" class="discard-button" onclick={handleDiscard}>
-            Discard mine
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="save-button"
-          disabled={!liveApi || !dirty || saving}
-          onclick={handleSave}
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
-      </div>
-      {#if saveError}
-        <div class="save-error">{saveError}</div>
-      {/if}
-    </header>
-
-    <div class="tab-strip" role="tablist">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={activeTab === "form"}
-        class="tab"
-        class:tab-active={activeTab === "form"}
-        onclick={() => (activeTab = "form")}
-      >
-        Form
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={activeTab === "json"}
-        class="tab"
-        class:tab-active={activeTab === "json"}
-        onclick={() => (activeTab = "json")}
-      >
-        JSON
-      </button>
-    </div>
-
-    <div class="tab-content">
-      {#if activeTab === "form"}
-        {#if !parsedDoc || !parsedDoc.ok}
-          <div class="parse-error">
-            <p>
-              {parsedDoc
-                ? parsedDoc.error
-                : "Nothing to edit — the selection no longer resolves."}
-            </p>
-            {#if parsedDoc}
-              <button
-                type="button"
-                class="switch-to-json"
-                onclick={() => (activeTab = "json")}
-              >
-                Switch to JSON
-              </button>
-            {/if}
-          </div>
-        {:else}
+        {:else if endpoint}
           <EndpointForm endpointId={endpoint.id} api={parsedDoc.api} />
         {/if}
       {:else}
@@ -486,7 +466,9 @@
       <div class="diagnostics">
         {#each diagnostics as d, i (i)}
           <div class="diagnostic diagnostic-{d.severity}">
-            {d.path} — {d.message}
+            <span class="diagnostic-dot"></span>
+            <span class="diagnostic-path">{d.path}</span>
+            <span class="diagnostic-message">{d.message}</span>
           </div>
         {/each}
       </div>
@@ -500,161 +482,277 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
-    gap: 0.5rem;
+    background: var(--color-bg);
   }
 
-  .placeholder {
-    color: var(--color-text-muted);
-    font-style: italic;
+  .spacer {
+    flex-grow: 1;
   }
 
-  .api-settings-title {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
-    font-size: 0.9rem;
-  }
+  /* --- Empty state ------------------------------------------------------ */
 
-  .summary {
+  .placeholder-pane {
+    flex-grow: 1;
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
-    flex-shrink: 0;
-  }
-
-  .summary-row {
-    display: flex;
     align-items: center;
-    gap: 0.5rem;
-    justify-content: space-between;
-  }
-
-  .method {
-    flex-shrink: 0;
-    font-size: 0.7rem;
-    font-weight: 700;
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-    background: var(--color-border);
-    color: var(--color-text);
-    min-width: 3rem;
+    justify-content: center;
+    gap: var(--space-4);
+    padding: var(--space-6);
     text-align: center;
   }
 
-  .method-get {
-    background: var(--color-method-get);
-  }
-  .method-post {
-    background: var(--color-method-post);
-  }
-  .method-put {
-    background: var(--color-method-put);
-  }
-  .method-patch {
-    background: var(--color-method-patch);
-  }
-  .method-delete {
-    background: var(--color-method-delete);
+  .placeholder-glyph {
+    color: var(--color-border);
   }
 
-  .url {
-    flex: 1;
+  .placeholder-pane p {
+    margin: 0;
+    max-width: 32ch;
+    font-size: var(--text-base);
+    line-height: 1.6;
+    color: var(--color-text-muted);
+  }
+
+  .keycap {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--color-text-faint);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 4px;
+  }
+
+  .keycap-quiet {
+    border-color: transparent;
+    color: inherit;
+    opacity: 0.6;
+  }
+
+  /* --- The URL bar ------------------------------------------------------ */
+
+  .bar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--color-border-soft);
+  }
+
+  .api-settings-title {
+    flex-shrink: 0;
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--color-text-strong);
+  }
+
+  .file-path {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--color-text-faint);
   }
 
-  .url-pending,
-  .url-error {
+  .url-box {
+    flex-grow: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    height: 2.125rem;
+    padding: 0 var(--space-4);
+    background: var(--color-field);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .url-box-problem {
+    border-color: var(--color-err-line);
+  }
+
+  .url {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--color-text);
+  }
+
+  .url-note {
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
-    font-style: italic;
-    font-family: inherit;
   }
 
-  .auth-kind {
-    font-size: 0.75rem;
-    color: var(--color-text-muted);
+  .url-box-problem .url-note {
+    color: var(--color-err);
   }
 
-  .save-button {
-    padding: 0.3rem 0.75rem;
-    font-size: 0.8rem;
-    border: 1px solid var(--color-accent);
-    border-radius: 4px;
+  .send-button {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 2.125rem;
+    padding: 0 var(--space-5);
+    border: none;
+    border-radius: var(--radius-md);
     background: var(--color-accent);
-    color: #fff;
+    color: var(--color-accent-on);
+    font-size: var(--text-sm);
+    font-weight: 600;
     cursor: pointer;
   }
 
-  .save-button:disabled {
+  .send-button:hover:not(:disabled) {
+    background: var(--color-accent-strong);
+  }
+
+  .send-button:disabled {
     background: var(--color-border);
-    border-color: var(--color-border);
-    color: var(--color-text-muted);
+    color: var(--color-text-faint);
     cursor: default;
   }
 
-  .save-error {
-    font-size: 0.75rem;
-    color: var(--color-error-text);
+  /* --- Meta row --------------------------------------------------------- */
+
+  .meta-row {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--color-border-soft);
   }
 
-  .removed-banner {
-    flex-shrink: 0;
-    font-size: 0.8rem;
-    padding: 0.4rem 0.6rem;
-    background: var(--color-error-bg);
-    color: var(--color-error-text);
-    border: 1px solid var(--color-error-text);
-    border-radius: 4px;
+  .auth-chip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    background: var(--color-inset);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+  }
+
+  .auth-chip-chained {
+    color: var(--color-text-soft);
   }
 
   .badge {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
     flex-shrink: 0;
-    font-size: 0.7rem;
-    padding: 0.1rem 0.35rem;
-    border-radius: 3px;
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
   }
 
-  .badge-disk-changed {
-    background: var(--color-method-put);
-    color: #1a1d21;
+  .badge-warn {
+    background: var(--color-warn-tint);
+    color: var(--color-warn);
   }
 
-  .discard-button {
+  .dirty-flag {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--color-accent);
+  }
+
+  .dirty-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .ghost-button {
     flex-shrink: 0;
-    padding: 0.2rem 0.5rem;
-    font-size: 0.75rem;
+    align-self: flex-start;
+    height: 1.75rem;
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-surface);
+    border-radius: var(--radius-md);
+    background: var(--color-inset);
+    color: var(--color-text);
     cursor: pointer;
   }
+
+  .ghost-button:hover {
+    border-color: var(--color-text-faint);
+  }
+
+  .save-button {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 1.75rem;
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-inset);
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  .save-button:hover:not(:disabled) {
+    border-color: var(--color-accent-line);
+    color: var(--color-accent);
+  }
+
+  .save-button:disabled {
+    color: var(--color-text-faint);
+    cursor: default;
+  }
+
+  /* --- Tabs ------------------------------------------------------------- */
 
   .tab-strip {
     flex-shrink: 0;
     display: flex;
-    gap: 0.25rem;
-    border-bottom: 1px solid var(--color-border);
+    align-items: center;
+    gap: 2px;
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--color-border-soft);
   }
 
   .tab {
-    padding: 0.35rem 0.75rem;
-    font-size: 0.8rem;
+    padding: var(--space-3) var(--space-3);
+    font-size: var(--text-base);
     border: none;
-    border-bottom: 2px solid transparent;
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
+    box-shadow: inset 0 -2px 0 0 transparent;
+  }
+
+  .tab:hover {
+    color: var(--color-text);
   }
 
   .tab-active {
-    color: var(--color-text);
-    border-bottom-color: var(--color-accent);
+    color: var(--color-text-strong);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 0 var(--color-accent);
+  }
+
+  .file-name {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--color-text-faint);
   }
 
   .tab-content {
@@ -662,28 +760,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-  }
-
-  .parse-error {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.75rem;
-    font-size: 0.8rem;
-    color: var(--color-error-text);
-    background: var(--color-error-bg);
-    border: 1px solid var(--color-error-text);
-    border-radius: 4px;
-  }
-
-  .switch-to-json {
-    align-self: flex-start;
-    padding: 0.25rem 0.6rem;
-    font-size: 0.75rem;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-surface);
-    cursor: pointer;
+    overflow: auto;
   }
 
   .editor-wrap {
@@ -691,26 +768,103 @@
     min-height: 0;
   }
 
+  /* --- Banners, diagnostics --------------------------------------------- */
+
+  .banner {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-5);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+  }
+
+  .banner-error {
+    background: var(--color-err-tint);
+    color: var(--color-err);
+    border-bottom: 1px solid var(--color-err-line);
+  }
+
+  .parse-error {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin: var(--space-5);
+    padding: var(--space-4);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    color: var(--color-err);
+    background: var(--color-err-tint);
+    border: 1px solid var(--color-err-line);
+    border-radius: var(--radius-lg);
+  }
+
+  .parse-error p {
+    margin: 0;
+  }
+
   .diagnostics {
     flex-shrink: 0;
     max-height: 30%;
     overflow-y: auto;
     border-top: 1px solid var(--color-border);
-    font-size: 0.75rem;
   }
 
   .diagnostic {
-    padding: 0.25rem 0.4rem;
-    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-5);
+    font-size: var(--text-xs);
+    border-bottom: 1px solid var(--color-border-soft);
+  }
+
+  .diagnostic:last-child {
+    border-bottom: none;
+  }
+
+  .diagnostic-dot {
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .diagnostic-path {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+  }
+
+  .diagnostic-message {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-muted);
   }
 
   .diagnostic-error {
-    background: var(--color-error-bg);
-    color: var(--color-error-text);
+    background: var(--color-err-tint);
+  }
+
+  .diagnostic-error .diagnostic-dot {
+    background: var(--color-err);
+  }
+
+  .diagnostic-error .diagnostic-path {
+    color: var(--color-err);
   }
 
   .diagnostic-warning {
-    background: #fdf3d9;
-    color: #8a5a00;
+    background: var(--color-warn-tint);
+  }
+
+  .diagnostic-warning .diagnostic-dot {
+    background: var(--color-warn);
+  }
+
+  .diagnostic-warning .diagnostic-path {
+    color: var(--color-warn);
   }
 </style>

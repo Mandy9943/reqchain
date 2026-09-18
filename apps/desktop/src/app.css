@@ -1,20 +1,250 @@
-:root {
-  --color-bg: #ffffff;
-  --color-surface: #f6f7f8;
-  --color-text: #1a1d21;
-  --color-text-muted: #6b7280;
-  --color-border: #dfe2e5;
-  --color-hover: #eceef1;
-  --color-selected: #dce8fb;
-  --color-accent: #2563eb;
-  --color-error-bg: #fdecec;
-  --color-error-text: #b3261e;
+/*
+ * The app's whole visual language lives here: every component styles itself
+ * through these tokens and never hardcodes a color, so a theme swap is a
+ * token swap and nothing else.
+ *
+ * Three theme states, not two (a webview honours the OS setting, and the
+ * titlebar toggle can override it either way):
+ *   - bare `:root`                      — the complete LIGHT palette
+ *   - `prefers-color-scheme: dark`      — dark, unless the user forced light
+ *   - `[data-theme="dark"|"light"]`     — the toggle, which wins both ways
+ * Every token is declared in the bare `:root` block first; the other two
+ * blocks only REDEFINE. A color whose sole definition sits behind a media
+ * query renders one theme's text on the other theme's ground.
+ *
+ * Fonts are system stacks on purpose. `tauri.conf.json` ships
+ * `font-src 'self' data:`, so a webfont from a CDN would silently fail to
+ * load in the packaged app; the stacks below name the faces the design was
+ * drawn in (IBM Plex) and fall back to the platform's own UI face.
+ */
 
-  --color-method-get: #d5ecdb;
-  --color-method-post: #d8e6fb;
-  --color-method-put: #fbeecf;
-  --color-method-patch: #f1e3fb;
-  --color-method-delete: #fbdada;
+:root {
+  /* --- Surfaces, lightest ground to strongest line ---------------------- */
+  --color-bg: #eef1f5;
+  --color-surface: #f6f7f9;
+  --color-panel: #ffffff;
+  --color-inset: #eff2f6;
+  --color-field: #ffffff;
+  --color-border: #dce1e8;
+  --color-border-soft: #e6eaf0;
+  --color-hover: #e8ecf2;
+  --color-selected: rgba(164, 85, 31, 0.11);
+
+  /* --- Ink -------------------------------------------------------------- */
+  --color-text-strong: #0d1014;
+  --color-text: #151a20;
+  --color-text-soft: #3c4653;
+  --color-text-muted: #5a6472;
+  --color-text-faint: #828c9a;
+
+  /* --- Accent ----------------------------------------------------------- */
+  /* Copper marks what reqchain resolved for you: variables, injected auth,
+     the selected row, Send. It is deliberately NOT a status color. */
+  --color-accent: #a4551f;
+  --color-accent-strong: #8a4413;
+  --color-accent-on: #fff6ee;
+  --color-accent-tint: rgba(164, 85, 31, 0.11);
+  --color-accent-line: rgba(164, 85, 31, 0.45);
+
+  /* --- Semantics, kept apart from the accent ---------------------------- */
+  --color-ok: #2c7554;
+  --color-ok-tint: rgba(44, 117, 84, 0.1);
+  --color-warn: #7f5c0c;
+  --color-warn-tint: rgba(127, 92, 12, 0.1);
+  --color-err: #ab362d;
+  --color-err-tint: rgba(171, 54, 45, 0.09);
+  --color-err-line: rgba(171, 54, 45, 0.45);
+  --color-info: #33639b;
+  --color-info-tint: rgba(51, 99, 155, 0.1);
+
+  /* Older names the form/secrets components already style through. */
+  --color-error-bg: var(--color-err-tint);
+  --color-error-text: var(--color-err);
+
+  /* --- Methods: a foreground and its tint, never a flat fill ------------ */
+  --color-method-get: #2c7554;
+  --color-method-get-tint: rgba(44, 117, 84, 0.11);
+  --color-method-post: #33639b;
+  --color-method-post-tint: rgba(51, 99, 155, 0.11);
+  --color-method-put: #7f5c0c;
+  --color-method-put-tint: rgba(127, 92, 12, 0.11);
+  --color-method-patch: #7a54a0;
+  --color-method-patch-tint: rgba(122, 84, 160, 0.11);
+  --color-method-delete: #ab362d;
+  --color-method-delete-tint: rgba(171, 54, 45, 0.11);
+  --color-method-other: #5a6472;
+  --color-method-other-tint: rgba(90, 100, 114, 0.11);
+
+  /* --- Syntax (response bodies, request previews) ----------------------- */
+  --color-syntax-key: #2a5f92;
+  --color-syntax-string: #2f724a;
+  --color-syntax-number: #8f5716;
+
+  /* --- Type ------------------------------------------------------------- */
+  --font-sans:
+    "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-condensed:
+    "IBM Plex Sans Condensed", "IBM Plex Sans", -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+  --font-display:
+    Archivo, "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  --text-xs: 0.688rem; /* 11px — chips, keycaps */
+  --text-sm: 0.75rem; /* 12px — mono, meta */
+  --text-base: 0.813rem; /* 13px — rows, labels, prose */
+  --text-md: 0.875rem; /* 14px — section titles */
+  --text-lg: 1.25rem; /* 20px — wordmark */
+  --text-status: 1.375rem; /* 22px — the response status numeral */
+
+  /* --- Space, radius, elevation ----------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.375rem;
+  --space-3: 0.5rem;
+  --space-4: 0.688rem;
+  --space-5: 0.875rem;
+  --space-6: 1.25rem;
+
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  --row-height: 1.75rem;
+  --control-height: 2rem;
+  /* Width of the label column in the request form. Shared by ApiForm,
+     EndpointForm, AuthEditor and BodyEditor so every field in the centre
+     column starts on the same left edge, however deeply nested. */
+  --label-col: 6rem;
+
+  --shadow-pop: 0 6px 20px rgba(13, 16, 20, 0.14);
+
+  /* A <select> ignores `background-color` in the platform's native styling,
+     so every select in the app sets `appearance: none` and paints this
+     chevron itself — otherwise selects sit on a different ground than the
+     text inputs beside them. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235a6472' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #0f1318;
+    --color-surface: #131820;
+    --color-panel: #151a21;
+    --color-inset: #1b212a;
+    --color-field: #12171e;
+    --color-border: #262e39;
+    --color-border-soft: #1e252e;
+    --color-hover: #1b212a;
+    --color-selected: rgba(192, 112, 59, 0.13);
+
+    --color-text-strong: #f2f5f9;
+    --color-text: #e6eaf0;
+    --color-text-soft: #c3cad4;
+    --color-text-muted: #8a94a3;
+    --color-text-faint: #5c6675;
+
+    --color-accent: #c0703b;
+    --color-accent-strong: #d98b55;
+    --color-accent-on: #150e08;
+    --color-accent-tint: rgba(192, 112, 59, 0.13);
+    --color-accent-line: rgba(192, 112, 59, 0.5);
+
+    --color-ok: #5fa97c;
+    --color-ok-tint: rgba(95, 169, 124, 0.14);
+    --color-warn: #c79a3c;
+    --color-warn-tint: rgba(199, 154, 60, 0.13);
+    --color-err: #c75b52;
+    --color-err-tint: rgba(199, 91, 82, 0.13);
+    --color-err-line: rgba(199, 91, 82, 0.5);
+    --color-info: #6e97c8;
+    --color-info-tint: rgba(110, 151, 200, 0.14);
+
+    --color-method-get: #63a88a;
+    --color-method-get-tint: rgba(99, 168, 138, 0.14);
+    --color-method-post: #6e97c8;
+    --color-method-post-tint: rgba(110, 151, 200, 0.16);
+    --color-method-put: #c79a3c;
+    --color-method-put-tint: rgba(199, 154, 60, 0.14);
+    --color-method-patch: #a585c0;
+    --color-method-patch-tint: rgba(165, 133, 192, 0.16);
+    --color-method-delete: #c75b52;
+    --color-method-delete-tint: rgba(199, 91, 82, 0.14);
+    --color-method-other: #8a94a3;
+    --color-method-other-tint: rgba(138, 148, 163, 0.14);
+
+    --color-syntax-key: #7fa8ce;
+    --color-syntax-string: #9cc49b;
+    --color-syntax-number: #d8a06a;
+
+    --shadow-pop: 0 6px 22px rgba(0, 0, 0, 0.45);
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a94a3' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+    color-scheme: dark;
+  }
+}
+
+/* The toggle, forcing dark over a light OS. Same token set as above — keep
+   the two blocks in sync; everything else in the app reads only the names. */
+:root[data-theme="dark"] {
+  --color-bg: #0f1318;
+  --color-surface: #131820;
+  --color-panel: #151a21;
+  --color-inset: #1b212a;
+  --color-field: #12171e;
+  --color-border: #262e39;
+  --color-border-soft: #1e252e;
+  --color-hover: #1b212a;
+  --color-selected: rgba(192, 112, 59, 0.13);
+
+  --color-text-strong: #f2f5f9;
+  --color-text: #e6eaf0;
+  --color-text-soft: #c3cad4;
+  --color-text-muted: #8a94a3;
+  --color-text-faint: #5c6675;
+
+  --color-accent: #c0703b;
+  --color-accent-strong: #d98b55;
+  --color-accent-on: #150e08;
+  --color-accent-tint: rgba(192, 112, 59, 0.13);
+  --color-accent-line: rgba(192, 112, 59, 0.5);
+
+  --color-ok: #5fa97c;
+  --color-ok-tint: rgba(95, 169, 124, 0.14);
+  --color-warn: #c79a3c;
+  --color-warn-tint: rgba(199, 154, 60, 0.13);
+  --color-err: #c75b52;
+  --color-err-tint: rgba(199, 91, 82, 0.13);
+  --color-err-line: rgba(199, 91, 82, 0.5);
+  --color-info: #6e97c8;
+  --color-info-tint: rgba(110, 151, 200, 0.14);
+
+  --color-method-get: #63a88a;
+  --color-method-get-tint: rgba(99, 168, 138, 0.14);
+  --color-method-post: #6e97c8;
+  --color-method-post-tint: rgba(110, 151, 200, 0.16);
+  --color-method-put: #c79a3c;
+  --color-method-put-tint: rgba(199, 154, 60, 0.14);
+  --color-method-patch: #a585c0;
+  --color-method-patch-tint: rgba(165, 133, 192, 0.16);
+  --color-method-delete: #c75b52;
+  --color-method-delete-tint: rgba(199, 91, 82, 0.14);
+  --color-method-other: #8a94a3;
+  --color-method-other-tint: rgba(138, 148, 163, 0.14);
+
+  --color-syntax-key: #7fa8ce;
+  --color-syntax-string: #9cc49b;
+  --color-syntax-number: #d8a06a;
+
+  --shadow-pop: 0 6px 22px rgba(0, 0, 0, 0.45);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a94a3' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  color-scheme: dark;
 }
 
 * {
@@ -28,12 +258,11 @@ body {
 }
 
 body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
   color: var(--color-text);
   background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {
@@ -45,4 +274,41 @@ input,
 select,
 textarea {
   font: inherit;
+  color: inherit;
+}
+
+select {
+  appearance: none;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  padding-right: 1.75rem;
+}
+
+/* One visible focus ring for the whole app. Every control is a real
+   button/input/select, so this is all the keyboard affordance needed. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: var(--color-accent-tint);
+}
+
+/* Scrollbars, so a scrolling pane doesn't punch a bright strip through a
+   dark panel. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

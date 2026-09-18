@@ -185,19 +185,19 @@
   .auth-editor {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: var(--space-3);
   }
 
   .field-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-4);
   }
 
   .field-row label {
     flex-shrink: 0;
-    width: 7rem;
-    font-size: 0.8rem;
+    width: var(--label-col);
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
 
@@ -205,27 +205,35 @@
   input {
     flex: 1;
     min-width: 0;
-    padding: 0.3rem 0.4rem;
-    font-size: 0.85rem;
+    height: var(--control-height);
+    padding: 0 var(--space-4);
+    font-size: var(--text-base);
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-field);
     color: var(--color-text);
   }
 
+  select:focus,
+  input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+
   input.mono {
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 
   .hint {
     margin: 0;
-    font-size: 0.75rem;
+    padding-left: calc(var(--label-col) + var(--space-4));
+    font-size: var(--text-xs);
+    line-height: 1.55;
     color: var(--color-text-muted);
   }
 
   .hint code {
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
   }
 </style>

@@ -1,10 +1,13 @@
 <script lang="ts">
   import { history as fetchHistory, type HistoryEntry } from "./ipc";
+  import { formatSize, statusClass } from "./format";
   import {
     selectedApiOrRemoved,
     selectedEndpointOrRemoved,
     ui,
   } from "./state.svelte";
+  import Icon from "./ui/Icon.svelte";
+  import MethodChip from "./ui/MethodChip.svelte";
 
   let entries = $state<HistoryEntry[]>([]);
   let loadError = $state<string | null>(null);
@@ -59,147 +62,244 @@
     return Number.isNaN(d.getTime()) ? at : d.toLocaleString();
   }
 
-  function formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  }
-
-  function statusClass(status: number): string {
-    const leading = Math.floor(status / 100);
-    if (leading === 2) return "ok";
-    if (leading === 3) return "redirect";
-    return "err";
-  }
-
   function toggle(i: number): void {
     expandedIndex = expandedIndex === i ? null : i;
   }
+
+  /**
+   * The latency sparkline over this endpoint's recent runs, oldest on the
+   * left. It answers the question the row list makes you read for — "is
+   * this endpoint getting slower, and did anything fail lately?" — in one
+   * glance, so the drawer stays worth collapsing.
+   */
+  const SPARK_MAX = 24;
+
+  const spark = $derived.by(() => {
+    // `entries` comes back newest-first; a time series reads left to right.
+    const recent = entries.slice(0, SPARK_MAX).reverse();
+    if (recent.length === 0) return [];
+    const slowest = Math.max(...recent.map((e) => e.elapsedMs), 1);
+    return recent.map((e) => ({
+      // A floor of 2px: a 3 ms run next to a 4 s one must still be a mark,
+      // not an invisible zero-height bar.
+      height: Math.max(2, Math.round((e.elapsedMs / slowest) * 16)),
+      kind: statusClass(e.status),
+      label: `${e.status} · ${e.elapsedMs} ms`,
+    }));
+  });
 </script>
 
-<div class="history-panel">
-  <button
-    type="button"
-    class="history-toggle"
-    onclick={() => (collapsed = !collapsed)}
-    aria-expanded={!collapsed}
-  >
-    {collapsed ? "▸" : "▾"} History{#if entries.length}
-      ({entries.length}){/if}
-  </button>
+<div class="history-panel" class:history-panel-open={!collapsed}>
+  <div class="history-head">
+    <button
+      type="button"
+      class="history-toggle"
+      onclick={() => (collapsed = !collapsed)}
+      aria-expanded={!collapsed}
+    >
+      <Icon name={collapsed ? "chevron-right" : "chevron-down"} size={12} />
+      <span class="history-label">History</span>
+      {#if entries.length}
+        <span class="history-count">{entries.length} runs</span>
+      {/if}
+    </button>
+
+    <span class="spacer"></span>
+
+    {#if spark.length > 0}
+      <span
+        class="spark"
+        title={`Last ${spark.length} runs, oldest first`}
+        aria-hidden="true"
+      >
+        {#each spark as bar, i (i)}
+          <span
+            class="spark-bar spark-{bar.kind}"
+            style="height: {bar.height}px"
+            title={bar.label}
+          ></span>
+        {/each}
+      </span>
+    {/if}
+  </div>
 
   {#if !collapsed}
-    {#if loadError}
-      <div class="history-error">{loadError}</div>
-    {:else if !api || !endpoint}
-      <p class="placeholder">Select an endpoint to see its run history.</p>
-    {:else if entries.length === 0}
-      <p class="placeholder">No runs recorded yet.</p>
-    {:else}
-      <ul class="history-list">
-        {#each entries as entry, i (i)}
-          <li>
-            <button
-              type="button"
-              class="history-row"
-              onclick={() => toggle(i)}
-              aria-expanded={expandedIndex === i}
-            >
-              <span class="history-time">{formatTime(entry.at)}</span>
-              <span class="status status-{statusClass(entry.status)}"
-                >{entry.status}</span
+    <div class="history-body">
+      {#if loadError}
+        <p class="notice notice-error">{loadError}</p>
+      {:else if !api || !endpoint}
+        <p class="notice">Select an endpoint to see its run history.</p>
+      {:else if entries.length === 0}
+        <p class="notice">No runs recorded yet.</p>
+      {:else}
+        <ul class="history-list">
+          {#each entries as entry, i (i)}
+            <li>
+              <button
+                type="button"
+                class="history-row"
+                class:history-row-open={expandedIndex === i}
+                onclick={() => toggle(i)}
+                aria-expanded={expandedIndex === i}
               >
-              <span class="history-meta">{entry.elapsedMs} ms</span>
-              <span class="history-meta">{formatSize(entry.sizeBytes)}</span>
-              <span class="history-method">{entry.method}</span>
-              <span class="history-url">{entry.url}</span>
-            </button>
+                <span class="history-time">{formatTime(entry.at)}</span>
+                <span class="history-status status-{statusClass(entry.status)}">
+                  {entry.status}
+                </span>
+                <span class="history-meta">{entry.elapsedMs} ms</span>
+                <span class="history-meta history-meta-quiet">
+                  {formatSize(entry.sizeBytes)}
+                </span>
+                <MethodChip method={entry.method} />
+                <span class="history-url">{entry.url}</span>
+              </button>
 
-            {#if expandedIndex === i}
-              <div class="history-detail">
-                {#if entry.requestBody === undefined && entry.responseBody === undefined}
-                  <p class="placeholder">bodies not stored</p>
-                {:else}
-                  <h4>Request body</h4>
-                  {#if entry.requestBody === undefined}
-                    <p class="placeholder">request body not stored</p>
+              {#if expandedIndex === i}
+                <div class="history-detail">
+                  {#if entry.requestBody === undefined && entry.responseBody === undefined}
+                    <p class="notice">
+                      Bodies were not stored for this run.
+                    </p>
                   {:else}
-                    <pre class="body-text">{entry.requestBody || "(empty)"}</pre>
+                    <span class="section-label">Request body</span>
+                    {#if entry.requestBody === undefined}
+                      <p class="notice">Request body not stored.</p>
+                    {:else}
+                      <pre class="body-text">{entry.requestBody || "(empty)"}</pre>
+                    {/if}
+                    <span class="section-label">Response body</span>
+                    {#if entry.responseBody === undefined}
+                      <p class="notice">Response body not stored.</p>
+                    {:else}
+                      <pre class="body-text">{entry.responseBody || "(empty)"}</pre>
+                    {/if}
                   {/if}
-                  <h4>Response body</h4>
-                  {#if entry.responseBody === undefined}
-                    <p class="placeholder">response body not stored</p>
-                  {:else}
-                    <pre class="body-text">{entry.responseBody || "(empty)"}</pre>
-                  {/if}
-                {/if}
-              </div>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    {/if}
+                </div>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
   {/if}
 </div>
 
 <style>
   .history-panel {
     flex-shrink: 0;
-    max-height: 40%;
     display: flex;
     flex-direction: column;
     min-height: 0;
     border-top: 1px solid var(--color-border);
-    padding-top: 0.4rem;
+    background: var(--color-surface);
   }
 
-  .placeholder {
-    color: var(--color-text-muted);
-    font-style: italic;
-    font-size: 0.8rem;
+  .history-panel-open {
+    max-height: 45%;
+  }
+
+  .spacer {
+    flex-grow: 1;
+  }
+
+  .history-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-5);
   }
 
   .history-toggle {
-    flex-shrink: 0;
-    align-self: flex-start;
-    padding: 0.15rem 0.3rem;
-    font-size: 0.8rem;
-    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
     border: none;
     background: none;
-    color: var(--color-text);
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
-  .history-error {
-    font-size: 0.8rem;
-    color: var(--color-error-text);
-    background: var(--color-error-bg);
-    border: 1px solid var(--color-error-text);
-    border-radius: 4px;
-    padding: 0.3rem 0.5rem;
+  .history-toggle:hover {
+    color: var(--color-text-strong);
+  }
+
+  .history-label {
+    font-family: var(--font-condensed);
+    font-weight: 600;
+    font-size: 0.625rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+  }
+
+  .history-count {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--color-text-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- Sparkline -------------------------------------------------------- */
+
+  .spark {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 16px;
+  }
+
+  .spark-bar {
+    width: 3px;
+    border-radius: 1px;
+    background: var(--color-text-faint);
+  }
+
+  .spark-ok {
+    background: var(--color-ok);
+    opacity: 0.55;
+  }
+
+  .spark-redirect {
+    background: var(--color-warn);
+    opacity: 0.7;
+  }
+
+  .spark-err {
+    background: var(--color-err);
+  }
+
+  /* The newest run is the one you just fired: it reads at full strength. */
+  .spark-bar:last-child {
+    opacity: 1;
+  }
+
+  /* --- Rows ------------------------------------------------------------- */
+
+  .history-body {
+    flex-grow: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .history-list {
     list-style: none;
     margin: 0;
-    padding: 0;
-    overflow-y: auto;
-    min-height: 0;
+    padding: 0 0 var(--space-3);
   }
 
   .history-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: 11rem 2.5rem 4rem 4rem 2.875rem minmax(0, 1fr);
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-3);
     width: 100%;
-    padding: 0.25rem 0.4rem;
+    height: var(--row-height);
+    padding: 0 var(--space-5);
     border: none;
-    border-bottom: 1px solid var(--color-border);
-    background: transparent;
-    color: var(--color-text);
-    font-size: 0.75rem;
+    background: none;
     text-align: left;
+    font-size: var(--text-xs);
     cursor: pointer;
   }
 
@@ -207,78 +307,97 @@
     background: var(--color-hover);
   }
 
+  .history-row-open {
+    background: var(--color-accent-tint);
+  }
+
   .history-time {
-    flex-shrink: 0;
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .history-status {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .status-ok {
+    color: var(--color-ok);
+  }
+
+  .status-redirect {
+    color: var(--color-warn);
+  }
+
+  .status-err {
+    color: var(--color-err);
+  }
+
+  .history-meta {
+    font-family: var(--font-mono);
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
   }
 
-  .status {
-    flex-shrink: 0;
-    font-weight: 700;
-    padding: 0.1rem 0.35rem;
-    border-radius: 3px;
-  }
-
-  .status-ok {
-    background: var(--color-method-get);
-    color: #1a1d21;
-  }
-
-  .status-redirect {
-    background: var(--color-method-put);
-    color: #1a1d21;
-  }
-
-  .status-err {
-    background: var(--color-error-bg);
-    color: var(--color-error-text);
-  }
-
-  .history-meta {
-    flex-shrink: 0;
-    color: var(--color-text-muted);
-  }
-
-  .history-method {
-    flex-shrink: 0;
-    font-weight: 600;
+  .history-meta-quiet {
+    color: var(--color-text-faint);
   }
 
   .history-url {
+    font-family: var(--font-mono);
+    color: var(--color-text-soft);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
 
   .history-detail {
-    padding: 0.4rem 0.6rem 0.6rem;
-    border-bottom: 1px solid var(--color-border);
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-5) var(--space-4);
+    background: var(--color-bg);
+    border-top: 1px solid var(--color-border-soft);
+    border-bottom: 1px solid var(--color-border-soft);
   }
 
-  .history-detail h4 {
-    margin: 0;
-    font-size: 0.7rem;
-    color: var(--color-text-muted);
+  .section-label {
+    font-family: var(--font-condensed);
+    font-weight: 600;
+    font-size: 0.625rem;
+    letter-spacing: 0.13em;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    color: var(--color-text-faint);
   }
 
   .body-text {
     margin: 0;
-    padding: 0.4rem;
+    padding: var(--space-3) var(--space-4);
+    max-height: 12rem;
+    overflow: auto;
+    background: var(--color-field);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1.6;
+    color: var(--color-text-soft);
     white-space: pre-wrap;
     word-break: break-word;
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.75rem;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-surface);
+  }
+
+  .notice {
+    margin: 0;
+    padding: var(--space-3) var(--space-5);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+
+  .notice-error {
+    color: var(--color-err);
   }
 </style>

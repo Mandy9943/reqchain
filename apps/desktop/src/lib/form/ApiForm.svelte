@@ -416,34 +416,40 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 0.9rem;
+    gap: var(--space-6);
     overflow-y: auto;
     min-height: 0;
-    padding: 0.25rem 0;
+    padding: var(--space-5);
   }
 
   .field-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-4);
   }
 
   .field-row label {
     flex-shrink: 0;
-    width: 6rem;
-    font-size: 0.8rem;
+    width: var(--label-col);
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
 
   .field-row input {
     flex: 1;
     min-width: 0;
-    padding: 0.3rem 0.4rem;
-    font-size: 0.85rem;
+    height: var(--control-height);
+    padding: 0 var(--space-4);
+    font-size: var(--text-base);
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-field);
     color: var(--color-text);
+  }
+
+  .field-row input:focus {
+    outline: none;
+    border-color: var(--color-accent);
   }
 
   .field-row input:disabled {
@@ -452,22 +458,42 @@
   }
 
   .mono {
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
   }
 
   .hint {
     margin: 0;
-    font-size: 0.75rem;
+    font-size: var(--text-xs);
+    line-height: 1.55;
     color: var(--color-text-muted);
   }
 
+  .fields-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  /* Same section head as EndpointForm: name plus a hairline out to the
+     column's right edge. */
   .fields-section h3 {
-    margin: 0 0 0.4rem;
-    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin: 0;
+    font-family: var(--font-condensed);
+    font-weight: 600;
+    font-size: 0.625rem;
+    letter-spacing: 0.13em;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--color-text-muted);
+    color: var(--color-text-faint);
+  }
+
+  .fields-section h3::after {
+    content: "";
+    flex-grow: 1;
+    height: 1px;
+    background: var(--color-border-soft);
   }
 
   .environments {
@@ -481,8 +507,9 @@
 
   .environment {
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    padding: 0.5rem 0.6rem;
+    border-radius: var(--radius-lg);
+    background-color: var(--color-panel);
+    padding: var(--space-4);
   }
 
   .environment-header {
@@ -503,8 +530,8 @@
     padding: 0.25rem 0.4rem;
     font-size: 0.8rem;
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-bg);
     color: var(--color-text);
   }
 
@@ -537,8 +564,8 @@
     padding: 0.25rem 0.4rem;
     font-size: 0.8rem;
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-bg);
     color: var(--color-text);
   }
 
@@ -548,7 +575,7 @@
     flex-shrink: 0;
     padding: 0.2rem 0.5rem;
     font-size: 0.75rem;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     cursor: pointer;
   }
 
@@ -575,7 +602,7 @@
     padding: 0.3rem 0.6rem;
     font-size: 0.8rem;
     border: 1px dashed var(--color-border);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
@@ -588,7 +615,7 @@
   .confirm-row {
     margin: 0.4rem 0;
     padding: 0.4rem 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     font-size: 0.78rem;
   }
 

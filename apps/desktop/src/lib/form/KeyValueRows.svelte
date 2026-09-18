@@ -140,52 +140,70 @@
   .key-value-rows {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: var(--space-2);
   }
 
   .row {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: var(--space-2);
   }
 
   .row-error .row-key {
-    border-color: var(--color-error-text);
+    border-color: var(--color-err);
   }
 
   .row-key,
   .row-value {
     flex: 1;
     min-width: 0;
-    padding: 0.25rem 0.4rem;
-    font-size: 0.8rem;
+    height: 1.875rem;
+    padding: 0 var(--space-3);
+    font-size: var(--text-xs);
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-field);
     color: var(--color-text);
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
+  }
+
+  .row-key:focus,
+  .row-value:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+
+  .row-key::placeholder,
+  .row-value::placeholder {
+    color: var(--color-text-faint);
   }
 
   .row-remove {
     flex-shrink: 0;
-    width: 1.6rem;
-    height: 1.6rem;
+    width: 1.875rem;
+    height: 1.875rem;
     line-height: 1;
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-surface);
+    border-radius: var(--radius-md);
+    background: var(--color-inset);
     color: var(--color-text-muted);
     cursor: pointer;
   }
 
+  .row-remove:hover:not(:disabled) {
+    border-color: var(--color-err-line);
+    color: var(--color-err);
+  }
+
+  /* Hidden, not removed: the empty trailing row keeps its slot so the two
+     fields above it do not jump sideways when a row gains its button. */
   .row-remove:disabled {
     visibility: hidden;
   }
 
   .field-error {
     margin: 0;
-    font-size: 0.75rem;
-    color: var(--color-error-text);
+    font-size: var(--text-xs);
+    color: var(--color-err);
   }
 </style>

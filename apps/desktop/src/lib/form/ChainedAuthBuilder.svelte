@@ -548,15 +548,14 @@
     padding: 0.3rem 0.4rem;
     font-size: 0.85rem;
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-bg);
     color: var(--color-text);
     box-sizing: border-box;
   }
 
   input.mono {
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
   }
 
   .field-row {
@@ -579,8 +578,7 @@
   }
 
   .hint code {
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
   }
 
   .error-hint {

@@ -286,38 +286,45 @@
   .body-editor {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: var(--space-3);
   }
 
   .type-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-4);
   }
 
   .type-row label {
     flex-shrink: 0;
-    width: 4rem;
-    font-size: 0.8rem;
+    width: var(--label-col);
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
 
   .type-select {
     flex: 1;
     min-width: 0;
-    padding: 0.3rem 0.4rem;
-    font-size: 0.85rem;
+    height: var(--control-height);
+    padding: 0 var(--space-4);
+    font-size: var(--text-base);
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-field);
     color: var(--color-text);
   }
 
+  .type-select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+
   .hint {
-    color: var(--color-text-muted);
-    font-style: italic;
-    font-size: 0.8rem;
     margin: 0;
+    padding-left: calc(var(--label-col) + var(--space-4));
+    font-size: var(--text-xs);
+    line-height: 1.55;
+    color: var(--color-text-muted);
   }
 
   .confirm-switch {
@@ -329,7 +336,7 @@
     color: var(--color-error-text);
     background: var(--color-error-bg);
     border: 1px solid var(--color-error-text);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
   }
 
   .confirm-switch p {
@@ -346,7 +353,7 @@
     padding: 0.25rem 0.6rem;
     font-size: 0.75rem;
     border: 1px solid var(--color-error-text);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     cursor: pointer;
   }
 
@@ -398,10 +405,9 @@
     padding: 0.3rem 0.4rem;
     font-size: 0.85rem;
     border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    background-color: var(--color-bg);
     color: var(--color-text);
-    font-family:
-      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
   }
 </style>
