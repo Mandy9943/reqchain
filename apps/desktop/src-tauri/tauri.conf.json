@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "reqchain",
   "version": "0.1.0",
-  "identifier": "uy.reqchain.app",
+  "identifier": "uy.reqchain.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -29,6 +29,9 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png"
-    ]
+    ],
+    "category": "Development",
+    "shortDescription": "HTTP client for chained-auth APIs",
+    "longDescription": "An HTTP client for APIs whose credentials are themselves derived from a request: a token fetched from another endpoint, or a header hashed from the current date."
   }
 }

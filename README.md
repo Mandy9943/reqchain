@@ -10,6 +10,16 @@ is what you should point an AI agent at when asking it to write an API file.
 
 ## Prerequisites
 
+On Debian/Ubuntu, `scripts/install-prereqs.sh` installs everything below in one go
+(rustup, and the system packages needed for the desktop app's WebView and `.deb`
+bundling):
+
+```sh
+./scripts/install-prereqs.sh
+```
+
+Or by hand:
+
 - **Rust, stable toolchain**, via [rustup](https://rustup.rs):
   ```sh
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -20,8 +30,9 @@ is what you should point an AI agent at when asking it to write an API file.
   ```sh
   sudo apt install build-essential
   ```
-  Nothing else is needed: the HTTP stack uses rustls, not system OpenSSL, so there is no
-  `libssl-dev` or `pkg-config` dependency.
+  Nothing else is needed for the CLI alone: the HTTP stack uses rustls, not system
+  OpenSSL, so there is no `libssl-dev` or `pkg-config` dependency. The desktop app
+  below needs more.
 
 ## Build
 
@@ -44,12 +55,9 @@ cargo test --workspace
 ## Desktop app (development)
 
 The desktop app is a Tauri 2 + Svelte 5 shell over `reqchain-core`. In addition to the
-Rust prerequisites above, it needs the system WebView dependencies. On Debian/Ubuntu:
-
-```sh
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-```
+Rust prerequisites above, it needs the system WebView dependencies covered by
+`scripts/install-prereqs.sh` (or, by hand, `libwebkit2gtk-4.1-dev build-essential curl
+wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`).
 
 Then, from the repo root:
 
@@ -57,6 +65,26 @@ Then, from the repo root:
 pnpm --dir apps/desktop install
 pnpm --dir apps/desktop tauri dev
 ```
+
+## Desktop app (packaging)
+
+```sh
+pnpm --dir apps/desktop tauri build
+```
+
+produces a `.deb` at `target/release/bundle/deb/reqchain_<version>_amd64.deb`, built
+from `apps/desktop/src-tauri/tauri.conf.json`'s `bundle` config. It ships the binary, a
+`.desktop` entry (so the app shows up in the GNOME overview and can be pinned to
+favorites) and an icon installed into the standard hicolor path. Install it with:
+
+```sh
+sudo apt install ./target/release/bundle/deb/reqchain_<version>_amd64.deb
+```
+
+AppImage is deliberately not produced: for a single Ubuntu release this only adds a
+build target and requires placing the `.desktop` and icon by hand for the dock to work,
+which the `.deb` does automatically. The trade-off is that the `.deb` is tied to this
+Ubuntu release's library versions and has no self-update.
 
 ## Directory layout
 
